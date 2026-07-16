@@ -1,0 +1,15 @@
+**/.venv/
+**/data/
+**/backup/
+**/exports/
+**/.streamlit/secrets.toml
+**/.env
+**/.env.*
+!**/.env.example
+*.db
+*.db-*
+**/__pycache__/
+**/pycache/
+**/.pytest_cache/
+*.py[cod]
+
