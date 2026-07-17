@@ -1,6 +1,6 @@
 import streamlit as st
 from database import init_db
-from services.auth_service import is_cloud_configured,handle_callback,current_user,login_url,logout,is_allowed_user
+from services.auth_service import AuthCallbackError,is_cloud_configured,handle_callback,current_user,login_url,logout,is_allowed_user
 from services.backup_service import auto_backup
 from pages import v3_today,management,reports,payment_entry,sales
 
@@ -16,7 +16,8 @@ except Exception: pass
 
 if is_cloud_configured():
     try: handle_callback()
-    except Exception as e: st.error(f"ログイン処理に失敗しました: {e}")
+    except AuthCallbackError: st.error("ログインを完了できませんでした。もう一度Googleでログインしてください。")
+    except Exception: st.error("ログイン処理で問題が発生しました。もう一度Googleでログインしてください。")
     if not current_user():
         st.title("🎹 ピアノ教室運営 Ver.3"); st.write("先生用Googleアカウントでログインしてください。")
         st.link_button("Googleでログイン",login_url(),type="primary",use_container_width=True); st.stop()
