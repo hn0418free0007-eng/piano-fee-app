@@ -13,6 +13,10 @@
 --   今回は後方互換のための旧シグネチャ温存は行わず、RPCは常に1つだけ存在する状態にする。
 --   アプリと同時デプロイできるため、旧4引数版を先にDROPしてから新5引数版を作成する。
 --   本番Supabase SQL Editorで、アプリのデプロイと合わせて実行する。
+--   DROPとCREATEを同一トランザクションにまとめ、CREATEが失敗した場合はDROPごと
+--   ロールバックされ、旧版が残るようにする（関数が存在しない状態を避ける）。
+
+begin;
 
 drop function if exists complete_lesson_payment(bigint,text,text,text);
 
@@ -37,6 +41,8 @@ begin
  values('受領・押印済み','payments',new_id,c.student_id,c.target_month||' '||c.charge_type||' '||remaining||'円',p_received_by);
  return new_id;
 end $$;
+
+commit;
 
 -- 適用後の確認（読み取り専用）: complete_lesson_paymentが1つだけ存在し、5引数であることを確認する。
 -- select proname, pg_get_function_identity_arguments(oid) from pg_proc where proname='complete_lesson_payment';
