@@ -419,3 +419,64 @@ STEP1としてGitHub（origin/main）へpushし、STEP2としてcomplete_lesson_
 ## Claude CodeからChatGPTへの申し送り
 
 origin/mainへpush完了（コミット`3d73daa`まで）。続けてcomplete_lesson_payment RPCのreceived_date JST対応を実装した。本番Supabaseのタイムゾーンが`UTC`であることが判明したため、RPCへ`p_received_date`（Python側でAsia/Tokyo基準に解決）を追加し、`coalesce(p_received_date,current_date)`でフォールバックする設計とした。当初は後方互換のため旧4引数版を残す提案をしたが、ユーザーから「同時デプロイできるため後方互換不要、RPCは常に1つだけ」という指示を受け、`DROP FUNCTION IF EXISTS`で旧版を削除してから新版を作成するマイグレーション（`supabase_received_date_jst_fix.sql`、Purpose/Background付き）に変更した。JST日付解決は`services/common.py`の`today_jst()`に一本化し、`sales_service.py`・`v3_repository.py`で共有。テスト5件純増で全36件成功。コード・SQLは実装・コミット済みだが、**本番Supabaseへのマイグレーション適用はまだ行っていない**。次回、アプリのデプロイと同時にSQL Editorで実行する必要がある。origin/mainへのpushは今回のRPC対応分については行っていない（ユーザー指示）。
+
+---
+
+# 2026-07-23 22:45
+
+## 今回実施した内容
+
+PC再起動後の作業再開にあたり、まず現状確認（git log、git status、11ec903以降の未把握コミット、docs/worklog.mdの全セッション記録、pytest再実行）を行い、直前セッションからさらに6コミット（`15c0b2b`〜`6baa205`）が実施・push済みであることをユーザーへ報告した。その中で、`complete_lesson_payment` RPCのreceived_date JST対応（コード側は`p_received_date`付き5引数呼び出しへ変更済み）に対応する本番SQLマイグレーション（`supabase_received_date_jst_fix.sql`）が、docsの記録上まだ本番Supabaseへ適用されていないことを指摘し、「受領・押印済み」ボタンが本番で機能していない可能性がある、と報告した。
+
+続けて、ユーザーから「アプリ画面左上にStreamlit標準のページ一覧（app/dashboard/management/payment entry/reports/sales/v3 today）が独自の日本語メニューと二重表示されている」という報告を受け、原因を調査した。`local_web_app/pages/`が`app.py`と同階層にあるため、Streamlitのレガシーな`pages/`ディレクトリ自動認識機能が働き、各ファイルがサイドバーへ自動登録されていたことを特定した。
+
+調査の過程で、ローカルにインストール済みのStreamlit（1.59.2）のパッケージ内には`pages/`ディレクトリを自動スキャンするコードが見当たらず（`st.navigation()`を明示的に呼ばない限りページ一覧が生成されない構造）、ユーザー報告の二重メニューをこのローカル環境では再現・視覚確認できないことが判明した。`requirements.txt`が`streamlit>=1.36,<2`という範囲指定のみのため、本番のStreamlit Community Cloud環境がローカルと異なるバージョンを使っている可能性がある。
+
+まず`local_web_app/.streamlit/config.toml`へ`[client] showSidebarNavigation = false`を追記する対処案を提示したが、これは表示を隠すだけでアクセス制御にはならないこと、`pages/`配下の各ファイル（`dashboard.py`含む）はモジュールレベルでStreamlitの描画処理を一切呼んでいないため今のところデータ漏えいの実害はないものの、`app.py`のログイン・許可メールチェックを経由しない形でURLへ直接到達できる経路自体は残る、という点を報告した。
+
+ユーザーの判断により、表示だけの対処ではなく構造的な原因を断つ方針として、`local_web_app/pages/`を`local_web_app/app_pages/`へ`git mv`でリネームした（Streamlitは`pages`という名前のディレクトリを特別扱いするため、名前を変えることで自動認識自体が起こらなくなる）。
+
+## 変更したファイル
+
+- `local_web_app/pages/` → `local_web_app/app_pages/`（`git mv`でリネーム、7ファイル）
+- `local_web_app/app.py`（`from pages import ...`→`from app_pages import ...`）
+- `local_web_app/.streamlit/config.toml`（`[client] showSidebarNavigation = false`を追記、既存設定は保持）
+- `docs/04_PROJECT_STATUS.md`・`docs/08_CHATGPT引継ぎ.md`・`local_web_app/設計書.md`（`pages/`への参照を`app_pages/`へ更新。本ファイル`docs/worklog.md`の過去セッションの記述は履歴として書き換えていない）
+
+## テスト結果
+
+- `python -m compileall -q app.py database.py services app_pages tests` — エラーなし
+- `python -c "import app_pages.v3_today, app_pages.management, app_pages.reports, app_pages.payment_entry, app_pages.sales, app_pages.dashboard"` — インポートエラーなし
+- Streamlitをリネーム後に起動し、起動ログにエラーが無いこと、ルートURLが200を返すことを確認
+- `pytest -q` — **37 passed**（リネーム前後で件数・結果とも変化なし）
+- `python tests/demo_acceptance.py` — `DEMO_OK`で正常終了（`app.py`をAppTestで実行し、「今日の受付」の受領・押印済みボタンが正常に動作することを確認）
+- 追加のAppTestスクリプト（一時ファイル、未コミット）で、サイドバーの「メニュー」ラジオボタンから8画面（今日の受付／生徒管理／月次請求／発表会費請求／売上管理／未入金一覧／例外処理／データ・バックアップ）すべてを選択し、いずれも例外なく描画されることを確認した
+
+## Git
+
+- `git mv local_web_app/pages local_web_app/app_pages`によりリネームとして追跡されている（`git status`で`renamed:`と表示される）。
+- 本エントリ記録時点で、リネームはステージ済み、その他の編集（`app.py`・`config.toml`・ドキュメント3点）はステージされていない。**コミット・pushはまだ行っていない**（ユーザー指示）。
+
+## 決定事項
+
+- `pages/`→`app_pages/`のリネームを、二重メニュー・直接URLアクセス経路の双方に対する根本対策として採用する。`config.toml`の`showSidebarNavigation = false`は表示の保険として残す。
+- `docs/worklog.md`の過去セッションの記述（`pages/xxx.py`という表記）は、実施当時の実際のパスを記録した履歴であるため書き換えない。`04_PROJECT_STATUS.md`・`08_CHATGPT引継ぎ.md`・`設計書.md`は「現在の状態」を表すドキュメントとして`app_pages/`に更新する。
+
+## 保留事項
+
+- `requirements.txt`の`streamlit>=1.36,<2`というバージョン範囲は今回変更していない。本番とローカルのバージョン差を確認する方法（Streamlit Community Cloudの Deploy logs / Manage app 画面でのpipインストールログ確認など）はユーザーへ報告済みだが、実際の確認・固定（ピン留め）は次回以降の判断。
+- `complete_lesson_payment` RPCのreceived_date JST対応SQL（`supabase_received_date_jst_fix.sql`）の本番適用は、本セッションでも未実施のまま（別懸念として引き続き最優先で残っている）。
+- リネームのコミット・push、および本番Streamlit Cloud上での実際の表示確認（サイドバーの二重表示が消えていること、PC・スマホ両方の見た目）は次回以降。
+
+## 次回の作業予定
+
+1. 本セッションの変更（`app_pages/`リネーム、`app.py`、`config.toml`、ドキュメント）をユーザー承認のうえコミットする。
+2. 本番へデプロイし、サイドバーの二重表示が解消していること、各業務画面が今までどおり動作することを本番で確認する。
+3. `complete_lesson_payment` RPCのreceived_date JST対応SQLの本番適用（最優先で残っている別課題）に着手する。
+4. 本番とローカルのStreamlitバージョン差を実際に確認し、`requirements.txt`のバージョン固定要否を検討する。
+
+## Claude CodeからChatGPTへの申し送り
+
+PC再起動後のキャッチアップで、ユーザーが把握していた最新コミット（`11ec903`）よりさらに6コミット進んでいたことが判明し、その内容（売上集計の請求月／受領日基準分離、本日の受領額DB化、受領取消の動作確認、RPCのreceived_date JST対応）を整理して報告した。特に、RPCのJST対応コードは既にpush・自動デプロイされている一方、対応する本番SQLマイグレーションが未適用のため「受領・押印済み」ボタンが本番で失敗している可能性がある、という重大な懸念を報告済み（本セッションでは未対応、引き続き最優先）。
+
+続けて、Streamlit標準のページ一覧と独自の日本語メニューが二重表示される問題を調査し、`local_web_app/pages/`ディレクトリがStreamlitのレガシーなマルチページ自動認識のトリガーになっていたことを特定した。`config.toml`での表示抑制だけでなく、ユーザーの判断で`pages/`→`app_pages/`へのリネームという構造的対策を実施した。`git mv`でリネームを追跡させ、`app.py`のimportとドキュメント3点（`04_PROJECT_STATUS.md`・`08_CHATGPT引継ぎ.md`・`設計書.md`）のパス表記を更新。過去セッションの記述が残る本ファイルはあえて書き換えていない。リネーム後、コンパイル・インポート・Streamlit起動・pytest（37件）・demo_acceptance・8画面分のAppTest手動巡回いずれも問題なし。コミット・pushは未実施。なお、ローカルのStreamlit（1.59.2）ではそもそも`pages/`自動認識コードが見当たらず、二重メニュー自体をローカルで再現できなかったため、本番と同一バージョンかどうかの確認が別途必要（`requirements.txt`は`streamlit>=1.36,<2`と範囲指定のみで未固定）。

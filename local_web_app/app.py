@@ -2,7 +2,7 @@ import streamlit as st
 from database import init_db
 from services.auth_service import AuthCallbackError,is_cloud_configured,handle_callback,current_user,login_url,logout,is_allowed_user
 from services.backup_service import auto_backup
-from pages import v3_today,management,reports,payment_entry,sales
+from app_pages import v3_today,management,reports,payment_entry,sales
 
 st.set_page_config(page_title="ピアノ教室運営 Ver.3",page_icon="🎹",layout="wide",initial_sidebar_state="collapsed")
 st.markdown("""<style>

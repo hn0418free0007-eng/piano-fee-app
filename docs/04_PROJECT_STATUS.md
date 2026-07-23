@@ -13,7 +13,7 @@
 - GitHub、Streamlit Community Cloud、Supabase、Google OAuth、Google Calendar APIの接続は完了しています。
 - Google Calendar予定の取得、生徒照合、9,000円の受領登録まで本番相当環境で確認済みです。
 - `main` は `origin/main` と同期済みです（`git push origin main`実施済み）。
-- 売上管理・確定申告画面が40,000円と表示される問題は、「請求月ベース（target_month）」と「受領日ベース（received_date）」を区別せず合算していたことが原因と特定し、両基準を明示的に切り替えられるよう`services/sales_service.py`・`pages/sales.py`を修正しました。
+- 売上管理・確定申告画面が40,000円と表示される問題は、「請求月ベース（target_month）」と「受領日ベース（received_date）」を区別せず合算していたことが原因と特定し、両基準を明示的に切り替えられるよう`services/sales_service.py`・`app_pages/sales.py`を修正しました。
 - 「今日の受付」画面の「今日の売上」を、DBの`received_date`基準の「本日の受領額」に変更しました（`daily_received_amount()`/`today_received_amount()`、Asia/Tokyo基準）。
 - 受領取消処理（`cancel_payment`）の動作確認を実施し、明確な不具合は見つかりませんでした。回帰テスト8件を追加しています。
 - 本番SupabaseのDBタイムゾーンが`UTC`であることを確認し、`complete_lesson_payment` RPCが`received_date`を`current_date`（UTC）任せにしている問題への対応を実装しました。RPCは常に1つだけ存在させる方針とし、旧4引数版を`DROP FUNCTION IF EXISTS`で削除してから新5引数版を作成するマイグレーション（`local_web_app/supabase_received_date_jst_fix.sql`）を用意しました。**このSQLはまだ本番Supabaseに適用していません**（コード側は実装・テスト・コミット済み）。
@@ -94,8 +94,8 @@
 「請求月ベース（target_month）」と「受領日ベース（received_date）」を統一せず、明確に区別して両方確認できるようにしました。
 
 - `services/sales_service.py`: `monthly_sales`→`monthly_billed_amount`（請求月基準）／`monthly_received_amount`（受領月基準）に分割。`yearly_sales`・`student_yearly_sales`も同様に分割。`recital_sales`は`recital_billed_amount`に改名（発表会費は開催＝target_month基準のまま、ロジック変更なし）。
-- `pages/sales.py`: 「月別集計」「年間集計」「生徒別年間集計」タブに集計基準（請求月別／受領月別）を切り替えるラジオボタンとキャプションを追加。
-- `services/export_service.py` / `pages/reports.py`: 管理画面のCSV/Excel出力（`受領月別一覧（受領日基準）`等）は受領日基準であることを列名・選択肢名で明示（ロジックは未変更、target_month基準の出力追加は保留）。
+- `app_pages/sales.py`: 「月別集計」「年間集計」「生徒別年間集計」タブに集計基準（請求月別／受領月別）を切り替えるラジオボタンとキャプションを追加。
+- `services/export_service.py` / `app_pages/reports.py`: 管理画面のCSV/Excel出力（`受領月別一覧（受領日基準）`等）は受領日基準であることを列名・選択肢名で明示（ロジックは未変更、target_month基準の出力追加は保留）。
 - テスト: 6月分後払い・7月分通常・8月分前払いの3パターンを検証する回帰テストを追加（`tests/test_sales_service.py`）。全14テストが成功。Streamlit AppTestでも、同一データで請求月基準10,000円／受領月基準30,000円と正しく切り替わることを確認済み。
 
 #### 本番Supabase実データでの最終確認（未実施）
@@ -120,9 +120,9 @@ order by student_name, received_date;
 
 ### 「今日の受付」画面の「本日の受領額」DB化（対応済み）
 
-「今日の受付」画面の「今日の売上」は、ブラウザセッション中の`st.session_state`だけを合算しており、DBを参照していませんでした（再読み込み・別端末で値が消える／一致しない）。`services/sales_service.py`に`daily_received_amount(day=None)`（`day`省略時は`Asia/Tokyo`基準の当日）と`today_received_amount()`を追加し、`pages/v3_today.py`のメトリクスをDB参照（`received_date`が対象日、`cancelled_at is null`の`amount_received`合計）に変更しました。新規RPCは作成せず、クラウド時はDB側で`received_date`・`cancelled_at`を絞り込んでから合計する方式です。
+「今日の受付」画面の「今日の売上」は、ブラウザセッション中の`st.session_state`だけを合算しており、DBを参照していませんでした（再読み込み・別端末で値が消える／一致しない）。`services/sales_service.py`に`daily_received_amount(day=None)`（`day`省略時は`Asia/Tokyo`基準の当日）と`today_received_amount()`を追加し、`app_pages/v3_today.py`のメトリクスをDB参照（`received_date`が対象日、`cancelled_at is null`の`amount_received`合計）に変更しました。新規RPCは作成せず、クラウド時はDB側で`received_date`・`cancelled_at`を絞り込んでから合計する方式です。
 
-流用を避けた`services/dashboard_service.py`はSupabaseクラウド非対応（`is_cloud_configured()`分岐が無くローカルSQLite固定）であり、加えて`pages/dashboard.py`・`reports.render_daily()`は現在`app.py`から呼ばれていないデッドコードです（変更していません）。
+流用を避けた`services/dashboard_service.py`はSupabaseクラウド非対応（`is_cloud_configured()`分岐が無くローカルSQLite固定）であり、加えて`app_pages/dashboard.py`・`reports.render_daily()`は現在`app.py`から呼ばれていないデッドコードです（変更していません）。
 
 ### 受領取消処理の動作確認（対応済み・不具合なし）
 
@@ -221,7 +221,7 @@ from pg_proc where proname='complete_lesson_payment';
 |---|---|---|
 | 2026-07-23 | 受領取消処理の動作確認（不具合なし、テスト8件追加）。本番Supabaseのタイムゾーンが`UTC`であることを確認し、`complete_lesson_payment` RPCへ`p_received_date`（Asia/Tokyo基準）を追加するコード・SQLマイグレーションを実装。旧4引数版は温存せず`DROP FUNCTION IF EXISTS`後にCREATE。`services/common.py`に`today_jst()`を新設し共有化。全36テスト成功。origin/mainへpush実施。本番SQL適用はまだ | 完了（本番SQL適用は次回） |
 | 2026-07-23 | 「今日の受付」画面の「今日の売上」（session_state集計）をDBの`received_date`基準「本日の受領額」に変更。`services/sales_service.py`に`daily_received_amount()`/`today_received_amount()`（Asia/Tokyo基準、新規RPC無し）を追加。テスト9件追加で全23テスト成功。`complete_lesson_payment` RPCの`received_date`がPostgresの`current_date`任せでJST非対応である根本課題を発見し、本番トランザクションRPCへの変更は影響が大きいため別タスクとして保留 | 完了（RPCのreceived_date対応は別タスク） |
-| 2026-07-23 | 売上40,000円問題を修正。`services/sales_service.py`を請求月基準／受領日基準の関数に分割し、`pages/sales.py`に集計基準の切替UIを追加。前受金・後払いの回帰テストを追加し全14テスト成功。CSV/Excel出力（`export_service.py`）は受領日基準である旨を明示。「今日の受付」画面の受領額DB化と`dashboard_service.py`のクラウド対応は別タスクとして保留 | 完了（本番実データでの最終確認は次回） |
+| 2026-07-23 | 売上40,000円問題を修正。`services/sales_service.py`を請求月基準／受領日基準の関数に分割し、`app_pages/sales.py`に集計基準の切替UIを追加。前受金・後払いの回帰テストを追加し全14テスト成功。CSV/Excel出力（`export_service.py`）は受領日基準である旨を明示。「今日の受付」画面の受領額DB化と`dashboard_service.py`のクラウド対応は別タスクとして保留 | 完了（本番実データでの最終確認は次回） |
 | 2026-07-23 | Identity Sequence変更がコミット済みであることを反映し、テスト結果（4件・全体12件成功）を記録。売上40,000円問題の原因をコードレベルで特定（`received_date`基準集計と`target_month`の不一致）。作業履歴管理（`docs/worklog.md`）の運用を開始 | 完了 |
 | 2026-07-17 | 現在のGit状態、動作確認済み内容、40,000円問題、次回8段階手順を追記 | 完了 |
 | 2026-07-17 | プロジェクトドキュメント8ファイルを作成しGitHubへpush | 完了 |

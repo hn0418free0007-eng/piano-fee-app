@@ -92,7 +92,7 @@ piano-fee-app/
 │  ├─ supabase_schema.sql
 │  ├─ supabase_sequence_sync.sql
 │  ├─ supabase_received_date_jst_fix.sql
-│  ├─ pages/
+│  ├─ app_pages/
 │  ├─ services/
 │  ├─ tests/
 │  └─ .streamlit/
@@ -202,8 +202,8 @@ piano-fee-app/
 対応として、「請求月ベース（target_month）」と「受領日ベース（received_date）」を統一せず、明確に区別して両方確認できるようにしました。
 
 - `services/sales_service.py`: `monthly_sales`→`monthly_billed_amount`（請求月基準）／`monthly_received_amount`（受領月基準）に分割。`yearly_sales`・`student_yearly_sales`も同様。`recital_sales`は`recital_billed_amount`に改名（ロジック変更なし、発表会費は開催＝target_month基準）。
-- `pages/sales.py`: 「月別集計」「年間集計」「生徒別年間集計」タブに集計基準の切替ラジオボタンとキャプションを追加。
-- `services/export_service.py` / `pages/reports.py`: 管理画面のCSV/Excel出力は受領日基準であることを列名・選択肢名で明示（ロジックは未変更）。
+- `app_pages/sales.py`: 「月別集計」「年間集計」「生徒別年間集計」タブに集計基準の切替ラジオボタンとキャプションを追加。
+- `services/export_service.py` / `app_pages/reports.py`: 管理画面のCSV/Excel出力は受領日基準であることを列名・選択肢名で明示（ロジックは未変更）。
 - 前受金・後払いを含む回帰テスト（`tests/test_sales_service.py`）を追加し、全14テストが成功。Streamlit AppTestでも請求月基準10,000円／受領月基準30,000円と正しく切り替わることを確認済み。
 
 本番Supabaseの実データはこの開発環境から直接参照できないため（認証情報なし）、40,000円（22,000円＋18,000円）の実データ内訳は未確認です。次回、次のSQLをSupabase SQL Editorで実行して最終確認してください。
@@ -226,9 +226,9 @@ order by student_name, received_date;
 
 ### 「今日の受付」画面の「本日の受領額」DB化（対応済み）
 
-「今日の受付」画面の「今日の売上」は、ブラウザセッション中の`st.session_state`だけを合算しておりDBを参照していませんでした（再読み込み・別端末で値が消える／一致しない）。`services/sales_service.py`に`daily_received_amount(day=None)`（`day`省略時は`Asia/Tokyo`基準の当日）・`today_received_amount()`を追加し、`pages/v3_today.py`のメトリクスを「本日の受領額」としてDB参照（`received_date`が対象日・`cancelled_at is null`の`amount_received`合計）に変更しました。クラウド時はDB側で`received_date`・`cancelled_at`を絞り込んでからPython側で合計する方式で、新規RPCは作成していません。不要になった`st.session_state`の金額集計（`amount_{event_id}`）は削除し、受領済み表示に使う`done_{event_id}`は変更していません。
+「今日の受付」画面の「今日の売上」は、ブラウザセッション中の`st.session_state`だけを合算しておりDBを参照していませんでした（再読み込み・別端末で値が消える／一致しない）。`services/sales_service.py`に`daily_received_amount(day=None)`（`day`省略時は`Asia/Tokyo`基準の当日）・`today_received_amount()`を追加し、`app_pages/v3_today.py`のメトリクスを「本日の受領額」としてDB参照（`received_date`が対象日・`cancelled_at is null`の`amount_received`合計）に変更しました。クラウド時はDB側で`received_date`・`cancelled_at`を絞り込んでからPython側で合計する方式で、新規RPCは作成していません。不要になった`st.session_state`の金額集計（`amount_{event_id}`）は削除し、受領済み表示に使う`done_{event_id}`は変更していません。
 
-流用を避けた`services/dashboard_service.py`はSupabaseクラウド非対応（`is_cloud_configured()`分岐が無くローカルSQLite固定）であり、`pages/dashboard.py`・`reports.render_daily()`は現在`app.py`から呼ばれていないデッドコードです（変更していません）。
+流用を避けた`services/dashboard_service.py`はSupabaseクラウド非対応（`is_cloud_configured()`分岐が無くローカルSQLite固定）であり、`app_pages/dashboard.py`・`reports.render_daily()`は現在`app.py`から呼ばれていないデッドコードです（変更していません）。
 
 ### 受領取消処理の動作確認（対応済み・不具合なし）
 
