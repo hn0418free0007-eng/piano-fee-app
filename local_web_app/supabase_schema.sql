@@ -5,6 +5,7 @@ create table if not exists students (
  recital_fee integer not null default 0, enrollment_date date, withdrawal_date date,
  enrollment_status text not null default '在籍' check (enrollment_status in ('在籍','休会','退会')),
  guardian_name text default '', phone text default '', email text default '', notes text default '',
+ final_billing_month text,
  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
 create table if not exists charges (

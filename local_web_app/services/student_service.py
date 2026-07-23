@@ -22,10 +22,10 @@ def save_student(data, operator, student_id=None):
     stamp=now()
     fields=(data["name"],data["school_location"],data["grade"],int(data["monthly_fee"]),int(data["recital_fee"]),
             data.get("enrollment_date"),data.get("withdrawal_date"),data["enrollment_status"],data.get("guardian_name",""),
-            data.get("phone",""),data.get("email",""),data.get("notes",""))
+            data.get("phone",""),data.get("email",""),data.get("notes",""),data.get("final_billing_month"))
     cloud=_cloud_client()
     if cloud:
-        keys=['name','school_location','grade','monthly_fee','recital_fee','enrollment_date','withdrawal_date','enrollment_status','guardian_name','phone','email','notes']
+        keys=['name','school_location','grade','monthly_fee','recital_fee','enrollment_date','withdrawal_date','enrollment_status','guardian_name','phone','email','notes','final_billing_month']
         payload=dict(zip(keys,fields)); payload['updated_at']=stamp
         if student_id: sid=student_id; cloud.table('students').update(payload).eq('student_id',sid).execute()
         else: payload['created_at']=stamp; sid=cloud.table('students').insert(payload).execute().data[0]['student_id']
@@ -34,11 +34,11 @@ def save_student(data, operator, student_id=None):
     with connect() as con:
         if student_id:
             con.execute("""UPDATE students SET name=?,school_location=?,grade=?,monthly_fee=?,recital_fee=?,enrollment_date=?,
-              withdrawal_date=?,enrollment_status=?,guardian_name=?,phone=?,email=?,notes=?,updated_at=? WHERE student_id=?""", fields+(stamp,student_id))
+              withdrawal_date=?,enrollment_status=?,guardian_name=?,phone=?,email=?,notes=?,final_billing_month=?,updated_at=? WHERE student_id=?""", fields+(stamp,student_id))
             sid=student_id
         else:
             cur=con.execute("""INSERT INTO students(name,school_location,grade,monthly_fee,recital_fee,enrollment_date,
-              withdrawal_date,enrollment_status,guardian_name,phone,email,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", fields+(stamp,stamp))
+              withdrawal_date,enrollment_status,guardian_name,phone,email,notes,final_billing_month,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", fields+(stamp,stamp))
             sid=cur.lastrowid
         audit(con,"生徒情報変更","students",sid,sid,"生徒情報を保存",operator)
     return sid

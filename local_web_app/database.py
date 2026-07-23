@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS students (
  enrollment_date TEXT, withdrawal_date TEXT, enrollment_status TEXT NOT NULL DEFAULT '在籍'
   CHECK(enrollment_status IN ('在籍','休会','退会')),
  guardian_name TEXT DEFAULT '', phone TEXT DEFAULT '', email TEXT DEFAULT '', notes TEXT DEFAULT '',
+ final_billing_month TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS charges (
@@ -66,9 +67,17 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
     con.execute("PRAGMA busy_timeout=5000")
     return con
 
+def _migrate_students_columns(con: sqlite3.Connection) -> None:
+    """CREATE TABLE IF NOT EXISTSは既存テーブルに新しい列を追加しないため、
+    既に存在するローカルDBファイルに対しては、列が無い場合だけ安全にALTER TABLEで補う。"""
+    existing = {row[1] for row in con.execute("PRAGMA table_info(students)").fetchall()}
+    if "final_billing_month" not in existing:
+        con.execute("ALTER TABLE students ADD COLUMN final_billing_month TEXT")
+
 def init_db(path: Path | str | None = None, seed: bool = True) -> None:
     with connect(path) as con:
         con.executescript(SCHEMA)
+        _migrate_students_columns(con)
         if seed and con.execute("SELECT COUNT(*) FROM students").fetchone()[0] == 0:
             stamp = now()
             rows = [

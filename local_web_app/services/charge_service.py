@@ -1,26 +1,84 @@
+import re
 from database import connect, now
 from services.common import audit
+
+_YM_RE=re.compile(r'^\d{4}-(0[1-9]|1[0-2])$')
+
+def _valid_year_month(value):
+    """'YYYY-MM'形式（月は01〜12）かどうかを検証する。年月比較の前に必ずこれを通す。"""
+    return bool(value) and bool(_YM_RE.match(value))
 
 def _cloud_client():
     from services.auth_service import is_cloud_configured,current_user,get_client
     return get_client() if is_cloud_configured() and current_user() else None
 
-def create_monthly(target_month, due_date, operator):
+def _monthly_eligibility(student,target_month,billed_student_ids):
+    """生徒1名について、target_month分の月謝請求の対象可否と理由を判定する。
+    在籍→対象（入会月より前は対象外）。休会→常に対象外。
+    退会→レッスン料の最終請求月が設定済みで、対象月がそれ以前なら対象、
+    未設定なら「要確認」として自動請求対象外。"""
+    status=student.get('enrollment_status')
+    if status=='休会':
+        eligible=False; reason='休会のため対象外'
+    elif status=='退会':
+        fbm=student.get('final_billing_month')
+        if not _valid_year_month(fbm):
+            eligible=False; reason='要確認：レッスン料の最終請求月が未設定です'
+        elif target_month>fbm:
+            eligible=False; reason=f'最終請求月（{fbm}）より後のため対象外'
+        else:
+            eligible=True; reason='退会後だが最終請求月以前のため対象'
+    elif status=='在籍':
+        eligible=True; reason=''
+    else:
+        eligible=False; reason='不明な在籍状況のため対象外'
+    if eligible:
+        ed=student.get('enrollment_date')
+        # 入会日が無い（既存データとの互換性）場合は入会日判定をスキップし、対象になり得る。
+        if ed and len(ed)>=7 and _valid_year_month(ed[:7]) and target_month<ed[:7]:
+            eligible=False; reason='入会月より前のため対象外'
+    return {'eligible':eligible,'reason':reason,'already_billed':student['student_id'] in billed_student_ids}
+
+def monthly_billing_eligibility(target_month):
+    """対象月について、全生徒（在籍・休会・退会すべて）の月謝請求対象可否・理由・
+    同月請求の作成有無を判定する（読み取り専用。charges/audit_logsへは書き込まない）。
+    月次請求作成画面のチェックリスト表示、およびcreate_monthlyの対象確定の両方から使う。
+    """
+    if not _valid_year_month(target_month):
+        raise ValueError(f'対象月の形式が不正です: {target_month!r}')
     cloud=_cloud_client()
     if cloud:
-        students=cloud.table('students').select('*').eq('enrollment_status','在籍').execute().data; created=skipped=total=0
-        existing={r['student_id'] for r in cloud.table('charges').select('student_id').eq('target_month',target_month).eq('charge_type','月謝').execute().data}
-        for s in students:
-            if s['student_id'] in existing: skipped+=1; continue
+        students=cloud.table('students').select('*').execute().data
+        billed={r['student_id'] for r in cloud.table('charges').select('student_id').eq('target_month',target_month).eq('charge_type','月謝').execute().data}
+    else:
+        students=[dict(r) for r in connect().execute("SELECT * FROM students").fetchall()]
+        billed={r['student_id'] for r in connect().execute(
+            "SELECT student_id FROM charges WHERE target_month=? AND charge_type='月謝'",(target_month,)).fetchall()}
+    return [{**s,**_monthly_eligibility(s,target_month,billed)} for s in sorted(students,key=lambda x:x['name'])]
+
+def create_monthly(target_month, due_date, operator, student_ids=None):
+    """target_month分の月謝請求を作成する。
+    対象・重複判定はmonthly_billing_eligibility()で必ず再確認する
+    （呼び出し元のチェックボックス状態を無条件に信用しない）。
+    student_ids省略時は対象の全生徒、指定時はそのうち対象のものだけに絞る。
+    対象のうち既に当月請求済みの生徒はskippedに数え、新規作成は行わない。"""
+    eligibility=monthly_billing_eligibility(target_month)
+    eligible=[e for e in eligibility if e['eligible']]
+    if student_ids is not None:
+        allowed=set(student_ids)
+        eligible=[e for e in eligible if e['student_id'] in allowed]
+    to_insert=[e for e in eligible if not e['already_billed']]
+    created=0; skipped=sum(1 for e in eligible if e['already_billed']); total=0
+    cloud=_cloud_client()
+    if cloud:
+        for s in to_insert:
             try:
                 row=cloud.table('charges').insert({'student_id':s['student_id'],'target_month':target_month,'charge_type':'月謝','charge_amount':s['monthly_fee'],'due_date':due_date,'charge_status':'請求中'}).execute().data[0]
                 cloud.table('audit_logs').insert({'action_type':'請求作成','target_table':'charges','target_id':row['charge_id'],'student_id':s['student_id'],'action_detail':f"{target_month} 月謝 {s['monthly_fee']}円",'operator_name':operator}).execute(); created+=1; total+=s['monthly_fee']
             except Exception: skipped+=1
-        return {'created':created,'skipped':skipped,'total':total,'candidates':len(students)}
-    created=skipped=total=0
+        return {'created':created,'skipped':skipped,'total':total,'candidates':len(eligible)}
     with connect() as con:
-        students=con.execute("SELECT * FROM students WHERE enrollment_status='在籍'").fetchall()
-        for s in students:
+        for s in to_insert:
             try:
                 cur=con.execute("""INSERT INTO charges(student_id,target_month,charge_type,charge_amount,due_date,charge_status,created_at,updated_at)
                     VALUES(?,?,'月謝',?,?,'請求中',?,?)""",(s['student_id'],target_month,s['monthly_fee'],due_date,now(),now()))
@@ -29,7 +87,7 @@ def create_monthly(target_month, due_date, operator):
             except Exception as e:
                 if "UNIQUE" in str(e): skipped+=1
                 else: raise
-    return {"created":created,"skipped":skipped,"total":total,"candidates":len(students)}
+    return {"created":created,"skipped":skipped,"total":total,"candidates":len(eligible)}
 
 def create_recital(student_ids,target,amounts,due_date,operator):
     cloud=_cloud_client()
