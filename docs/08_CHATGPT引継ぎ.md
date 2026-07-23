@@ -5,7 +5,7 @@
 > 担当者は人間・ChatGPT・Codex・Claude Codeなどを問いません。
 > コードを変更する前に、必ず本ファイルと `docs/04_PROJECT_STATUS.md` を読み、現在の状態を理解してから作業を開始してください。
 
-最終更新日: 2026-07-23（売上集計の請求月／受領日基準分離を実装）
+最終更新日: 2026-07-23（「今日の受付」画面の本日の受領額DB化を実装）
 
 ## この文書の目的
 
@@ -105,11 +105,11 @@ piano-fee-app/
 | `local_web_app/app.py` | Authコールバック、利用許可、画面切替 |
 | `services/auth_service.py` | Supabaseクライアント、Google OAuth、PKCE、セッション |
 | `services/calendar_service.py` | Calendar API、デモ予定、タイトル正規化 |
-| `services/v3_repository.py` | Supabase／SQLite切替、通常受領RPC |
+| `services/v3_repository.py` | Supabase／SQLite切替、通常受領RPC（`complete_lesson_payment`呼出し。`received_date`はRPCのDBデフォルト任せでJST非対応、下記「既知の問題」参照） |
 | `services/payment_service.py` | 入金登録、押印、取消 |
 | `services/charge_service.py` | 月謝・発表会費請求 |
 | `services/student_service.py` | 生徒追加・更新・在籍状態 |
-| `services/sales_service.py` | 売上集計。請求月基準（`*_billed_amount`）と受領日基準（`*_received_amount`）を分離して提供する |
+| `services/sales_service.py` | 売上集計。請求月基準（`*_billed_amount`）と受領日基準（`*_received_amount`）を分離して提供する。`daily_received_amount()`/`today_received_amount()`はAsia/Tokyo基準の「本日の受領額」（「今日の受付」画面で使用） |
 | `services/export_service.py` | CSV・Excel出力 |
 | `services/backup_service.py` | ローカルSQLiteバックアップ |
 | `migrate_to_supabase.py` | SQLite移行とIdentity Sequence同期呼出し |
@@ -158,25 +158,27 @@ piano-fee-app/
 - ローカルデモと自動テスト
 - 作業履歴管理（`docs/worklog.md`）の運用開始
 - 売上40,000円問題の修正（請求月基準／受領日基準の分離。ローカル・UIで解消を確認済み、本番実データでの最終確認は次回）
+- 「今日の受付」画面の「本日の受領額」DB化（`daily_received_amount()`/`today_received_amount()`、Asia/Tokyo基準、新規RPC無し）
 
 ## 動作確認済み
 
 - Google Calendarの予定を取得できる
 - Calendar予定から生徒を照合できる
 - 9,000円の受領登録ができる
-- 受領後、今日の売上9,000円になる
 - 受領後、受領済み1名になる
 - 受領後、未受領0名になる
+- 受領後、「本日の受領額」が受領額どおりに更新される（DBの`received_date`基準）
 - Identity Sequence同期テスト4件が成功する
-- 全体テストスイート14件が成功する（既存12件＋売上集計の前受金・後払いテスト2件）
+- 全体テストスイート23件が成功する（Identity Sequence関連含む既存14件＋本日の受領額テスト9件）
 - Streamlit AppTestで売上管理画面の集計基準切替（請求月別⇄受領月別）を確認する
+- Streamlit AppTestで「本日の受領額」が受領登録前0円→登録後実額へ更新されることを確認する
 
 ## 未完成機能・未確認事項
 
 - 本番Supabase実データでの40,000円内訳の最終確認
 - CSV/Excel出力（`export_service.dataset()`）へ請求月基準の出力を追加するかどうかの検討
-- 「今日の受付」画面の「今日の売上」をDBの受領日基準へ変更する対応（別タスク、詳細は下記）
 - `services/dashboard_service.py`のSupabaseクラウド対応（現状デッドコードのため緊急ではない）
+- `complete_lesson_payment` RPCの`received_date`をJST基準で明示する対応（別タスク、詳細は下記）
 - 受領取消処理の動作確認
 - Excel出力の確認・改善（売上以外の出力項目）
 - 本番データでの総合運用テスト
@@ -212,8 +214,22 @@ order by student_name, received_date;
 #### 保留とした対応（別タスク）
 
 - CSV/Excel出力へ請求月基準の出力を追加するかどうか。
-- 「今日の受付」画面（`pages/v3_today.py`）の「今日の売上」は、現在ブラウザセッション中の`st.session_state`だけを合算しておりDBを参照していません。DB（`received_date`）基準への変更は影響分析のみ行い、実装は見送りました。理由: 既存の`services/dashboard_service.py`（`today_amount`等、同様の集計を持つ）がSupabaseクラウド非対応（`is_cloud_configured()`分岐が無くローカルSQLite固定）であり、単純な流用ができないためです。加えて`pages/dashboard.py`・`reports.render_daily()`は現在`app.py`から呼ばれていないデッドコードであることも判明しました。
 - `services/dashboard_service.py`のクラウド対応（現状デッドコードのため緊急ではない）。
+
+### 「今日の受付」画面の「本日の受領額」DB化（対応済み）
+
+「今日の受付」画面の「今日の売上」は、ブラウザセッション中の`st.session_state`だけを合算しておりDBを参照していませんでした（再読み込み・別端末で値が消える／一致しない）。`services/sales_service.py`に`daily_received_amount(day=None)`（`day`省略時は`Asia/Tokyo`基準の当日）・`today_received_amount()`を追加し、`pages/v3_today.py`のメトリクスを「本日の受領額」としてDB参照（`received_date`が対象日・`cancelled_at is null`の`amount_received`合計）に変更しました。クラウド時はDB側で`received_date`・`cancelled_at`を絞り込んでからPython側で合計する方式で、新規RPCは作成していません。不要になった`st.session_state`の金額集計（`amount_{event_id}`）は削除し、受領済み表示に使う`done_{event_id}`は変更していません。テスト9件を追加し全23テストが成功、Streamlit AppTestでも0円→実額への更新を確認済みです。
+
+流用を避けた`services/dashboard_service.py`はSupabaseクラウド非対応（`is_cloud_configured()`分岐が無くローカルSQLite固定）であり、`pages/dashboard.py`・`reports.render_daily()`は現在`app.py`から呼ばれていないデッドコードです（変更していません）。
+
+### complete_lesson_payment RPCのreceived_dateタイムゾーン問題（未対応・別タスク）
+
+「本日の受領額」の集計側はJST基準にしましたが、**登録側**の`complete_lesson_payment` RPC（クラウド「今日の受付」の受領登録経路）は、INSERT文に`received_date`列を含めておらず、テーブル定義の`default current_date`（Postgresサーバーのセッションタイムゾーン。Supabaseは新規プロジェクトで既定UTCのことが多い）に委ねたままです。
+
+- JST 00:00〜08:59（UTCではまだ前日）に受領登録すると、`received_date`がJSTの実際の日付より1日前で記録される可能性があります。登録直後の「本日の受領額」に反映されず、月をまたぐ場合は`monthly_received_amount`等の月次集計にもズレが波及します。
+- 修正が必要と判断していますが、今回は実装していません。理由: `complete_lesson_payment`は本番で最も頻繁に実行される受領登録の中核トランザクションRPCであり、変更には本番Supabaseへの新規SQLマイグレーション適用（SQL Editorでの手動実行）が必要で、この開発環境からは実行・検証ができないためです。
+- 対応する場合は、RPCに`p_received_date`パラメータを追加し、`v3_repository.complete()`のクラウド分岐で`Asia/Tokyo`基準の日付を明示的に渡す「限定的な修正」を推奨します（データベース全体のタイムゾーン設定変更は、`created_at`等の他カラムにも影響するため推奨しません）。
+- まず本番Supabaseで `show timezone;` を実行し、既に`Asia/Tokyo`に設定済みでないか確認してください。
 
 ## 今回までの重要な修正
 
@@ -265,7 +281,8 @@ order by student_name, received_date;
 ## 現在のGit状態
 
 - ドキュメント整合性修正: コミット `15c0b2b`（`Sync docs with actual git state and start worklog`）
-- 売上集計の請求月／受領日基準分離: 直後の別コミットとして反映済み（正確なコミットIDは `git log -1 --oneline` で確認してください）
+- 売上集計の請求月／受領日基準分離: コミット `8629d84`（`Split sales aggregation into billed-month and received-month bases`）
+- 「今日の受付」画面の本日の受領額DB化: 直後の別コミットとして反映済み（正確なコミットIDは `git log --oneline` で確認してください）
 - この時点で `origin/main` へは未pushです（pushはユーザーの明示的な指示があるまで行いません）。
 - 作業終了時は必ず `git status` で `nothing to commit` になっていることを確認します。
 
@@ -285,25 +302,33 @@ order by student_name, received_date;
 まず docs/08_CHATGPT引継ぎ.md、docs/04_PROJECT_STATUS.md、docs/worklog.md を読んでください。現在のGit状態と次回最優先事項を確認し、作業前に実施内容を短く報告してください。
 ```
 
-### STEP 2: Streamlit本番環境を確認する
+### STEP 2: 本番SupabaseのDBタイムゾーンを確認する
+
+`show timezone;` をSQL Editorで実行し、`complete_lesson_payment` RPCの`received_date`問題の前提を確認します。
+
+### STEP 3: Streamlit本番環境を確認する
 
 Community Cloudの本番アプリを開き、次を順番に確認します。
 
 1. アプリが正常起動する
 2. Googleログインができる
 3. Google Calendarを取得できる
-4. 今日の受付画面が表示される
+4. 今日の受付画面が表示される（「本日の受領額」が正しく表示されること）
 5. 受領登録ができる
 6. 売上管理・確定申告画面（請求月別／受領月別の切替）の表示が正しい
 7. エラーが表示されない
 
 本番URLが `docs/01_URL一覧.md` で未設定なら、確認できた時点で追記します。URLだけを記載し、Secretは書きません。
 
-### STEP 3: 本番Supabaseで40,000円問題の実データを最終確認する
+### STEP 4: 本番Supabaseで40,000円問題の実データを最終確認する
 
 `docs/04_PROJECT_STATUS.md`「既知の問題」記載の確認用SQLをSupabase SQL Editorで実行し、内訳が前受金・後払いの混入によるものかを確認します。
 
-### STEP 4: 受領取消処理を確認する
+### STEP 5: complete_lesson_payment RPCのreceived_date対応を判断する
+
+STEP 2の確認結果を踏まえ、対応するかどうか、対応する場合は限定的な修正案（RPCへのJST日付パラメータ追加）で進めるかをユーザーと決定します。
+
+### STEP 6: 受領取消処理を確認する
 
 確認項目:
 
@@ -311,18 +336,17 @@ Community Cloudの本番アプリを開き、次を順番に確認します。
 - `cancelled_at` と取消理由が保存される
 - 対応する `charge` が未受領または請求中へ戻る
 - 今日の受領済み人数が減る
-- 今日の売上から取消金額が除外される
+- 本日の受領額から取消金額が除外される
 - `audit_logs` に取消履歴が残る
 
 テストデータと本番データを混同しません。データ操作前に対象を確認します。
 
-### STEP 5: 保留事項を検討する
+### STEP 7: 保留事項を検討する
 
 - CSV/Excel出力へ請求月基準の出力を追加するかどうか
-- 「今日の受付」画面の「今日の売上」をDBの受領日基準へ変更する対応
 - `services/dashboard_service.py`のSupabaseクラウド対応
 
-### STEP 6: ドキュメントを更新する
+### STEP 8: ドキュメントを更新する
 
 作業終了前に必ず更新します。
 
@@ -398,5 +422,6 @@ Community Cloudの本番アプリを開き、次を順番に確認します。
 - [ ] `git status` を確認した
 - [ ] `git diff` と新規ファイルを確認した
 - [ ] 売上40,000円問題は請求月／受領日基準の分離で対応済みで、本番実データでの最終確認が次回優先事項であることを把握した
+- [ ] 「本日の受領額」DB化は完了しており、`complete_lesson_payment` RPCの`received_date`タイムゾーン対応が別タスクとして残っていることを把握した
 - [ ] 関連テストを実行する準備ができた
 - [ ] 作業前に実施内容を短く報告した

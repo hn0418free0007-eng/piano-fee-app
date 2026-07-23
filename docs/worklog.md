@@ -150,3 +150,130 @@ Identity Sequence同期はコミット`11ec903`で完了済みで、テストも
 ## Claude CodeからChatGPTへの申し送り
 
 売上集計を「請求月ベース（target_month）」と「受領日ベース（received_date）」に明確に分離した。`sales_service.py`の関数を`monthly_billed_amount`/`monthly_received_amount`等に分割改名し、`pages/sales.py`の月別・年間・生徒別年間タブに集計基準の切替UIを追加。発表会費は開催基準のまま`recital_billed_amount`に改名のみ。管理画面のCSV/Excel出力（`export_service.py`）は受領日基準である旨を列名・選択肢名で明示（ロジックは未変更）。前受金・後払いシナリオのテストを追加し、請求月基準と受領日基準で合計額が異なることを検証済み（全14テスト成功、UIでも10,000円⇄30,000円の切替を確認）。「今日の受付」画面の「今日の売上」をDB基準にする件は、既存の`dashboard_service.py`がSupabaseクラウド非対応（かつ現状デッドコード）であることが判明したため、安全な流用ができず今回は見送り、別タスクとして保留。CSV/Excel出力へのtarget_month基準追加も次回以降の検討課題。
+
+---
+
+# 2026-07-23 18:30
+
+## 今回実施した内容（調査のみ・コード変更なし）
+
+AI会社OS側で「標準開発プロセス」を整備した後、ピアノ教室アプリに戻り、「今日の受付」画面の「今日の売上」をDBの`received_date`基準の「本日の受領額」へ変更するための調査を実施した。コード変更・Gitコミットは行っていない。
+
+- `pages/v3_today.py`の現在のフローを確認: 「今日の売上」メトリクスは、`complete()`が成功した直後に`st.session_state[f"amount_{event_id}"]`へ書き込んだ値を、そのブラウザセッション中に表示されている今日のレッスン一覧に対して合算しているだけで、DBへの問い合わせは一切行っていない。ページ再読み込みや別端末では0にリセットされる。
+- `payments`テーブルへの登録経路を全て洗い出した。
+  - クラウド（本番）: `v3_today.py`→`v3_repository.complete()`→`complete_lesson_payment` RPC。このRPCの`insert`文には**`received_date`列が含まれておらず**、テーブル定義の`default current_date`（Postgresサーバー側の現在日付）に委ねている。
+  - ローカル（デモ/非クラウド）: `v3_repository.complete()`→`payment_service.register_payment(...,date.today().isoformat(),...)`。Python側の`date.today()`（Streamlitプロセスのサーバー時刻）。
+  - 例外処理画面（`payment_entry.py`）: オペレーターが`st.date_input("受取日",date.today())`で明示的に選択した日付を`register_payment`へ渡す（バックデート可能）。
+- **重要な発見（タイムゾーン）**: このアプリで唯一明示的に`Asia/Tokyo`（`zoneinfo.ZoneInfo`）を使っているのは`services/calendar_service.py`のCalendar API呼び出しだけ。それ以外（`payment_service.py`のローカル経路、`v3_repository.py`、`dashboard_service.py`、`backup_service.py`、`charge_service.py`の期限判定など）は全てナイーブな`datetime.date.today()`/`datetime.now()`で、実行環境（Streamlitサーバー、Supabaseのデータベースサーバー）のシステムタイムゾーンに依存している。多くのcrawクラウド環境はUTCがデフォルトのため、JST 00:00〜08:59（UTCではまだ前日）の時間帯に処理が行われた場合、「今日」の判定がJSTの実際の暦日と1日ずれる可能性がある。レッスンは日中に行われるため実害は起きにくいが、今回新設する「本日の受領額」の集計条件は、この既存の暗黙依存に引きずられず、`app.timezone`（Asia/Tokyo）を明示的に使うべきという設計方針とした。本番SupabaseのDBタイムゾーン設定（`show timezone;`）は未確認。
+- **重要な発見（再確認）**: `services/dashboard_service.py`（`metrics()`の`today_amount`、`today_summary()`）は`received_date`基準で「本日受領額」に相当する集計を既に持っているが、Supabaseクラウド分岐が無く常にローカルSQLiteを参照する。かつ`pages/dashboard.py`・`reports.render_daily()`はどちらも`app.py`から呼ばれていないデッドコードである（前回セッションで確認済み、今回再確認）。このため、新しい「本日の受領額」はこのモジュールを流用せず、クラウド対応が既に確立している`services/sales_service.py`（`_cloud()`/`_payments()`パターン）に追加する方針とした。
+- 受領取消（`payment_service.cancel_payment`）は`payments.cancelled_at`・`cancellation_reason`を設定するのみで、物理削除や`received_date`の変更は行わない。取消操作は「例外処理」画面（`reports.render_history`）からのみ可能で、「今日の受付」画面には取消UIが無い。両画面間はStreamlitの通常のページ切替（毎回スクリプト全体を再実行）であり、明示的なキャッシュ層（`st.cache_data`等）は現状どこにも導入されていないため、DBベースの集計に切り替えれば画面切替のたびに最新値が自然に反映される。
+- 複数端末・別ブラウザでの一貫性: 現状の`st.session_state`ベースの実装はブラウザセッションごとに独立しており、PC・スマホ・別ブラウザで異なる値になり得る。DBの`received_date`基準に変更すれば、どの端末からアクセスしても同じSupabaseテーブルを参照するため一致する。
+- Supabase側での安全な集計方法を3案比較した（詳細はユーザーへの報告メッセージを参照）。既存コードの一貫したパターン（`sales_service.py`の`_payments()`と同様、クラウド時は`.table('payments').select(...).eq(...).is_('cancelled_at','null').execute().data`、ローカル時はSQLの`WHERE`）に沿い、日付だけをDB側で絞り込んでからPython側で合算する方式を推奨案とした。新規RPCは、既存の`complete_lesson_payment`（トランザクション整合性が必要）や`sync_migration_identity_sequences`（RLSを越える必要がある管理者専用処理）のような特別な理由が無い限り、今回は過剰と判断した。
+- `test_migrate_to_supabase.py`の`RpcClient`フェイククライアントパターンを踏襲すれば、実際のSupabase接続なしに「クラウド分岐のロジックがローカル分岐と同じ結果になること」をテストできる見込み。
+
+## 変更したファイル
+
+なし（調査のみ）。`docs/worklog.md`（本エントリ）のみ追記。
+
+## Git
+
+- 変更なし。コミットも行っていない。
+
+## 決定事項
+
+- 新しい「本日の受領額」相当の関数は`services/sales_service.py`に追加する方針（`services/dashboard_service.py`は流用しない。`services/v3_repository.py`は今日の受付ページ固有のドメイン関数用であり集計の置き場としては不適切と判断）。
+- 集計条件は`received_date`が「JST基準の今日」、かつ`cancelled_at is null`、`amount_received`の合計とする。「JST基準の今日」は`date.today()`のようなナイーブな呼び出しではなく、`Asia/Tokyo`（設定可能なら`app.timezone`）を明示的に使う。
+- Supabase側の集計方法は、日付条件をDB側の`.eq()`で絞り込み、合計はPython側で行う方式を推奨（新規RPCは見送り）。
+
+## 保留事項（ユーザーの承認待ち）
+
+- 上記の実装方針そのもの（関数名、ファイル、UI文言、テスト計画）はユーザーへの報告メッセージで提示し、承認後に着手する。
+- `payments`挿入時の`received_date`のタイムゾーン依存（Postgresの`current_date`デフォルト、Pythonのナイーブな`date.today()`）を、明示的にJST基準へ揃えるかどうかは、今回のスコープ外の別課題として提示するに留める。
+- 本番SupabaseのDBタイムゾーン設定は未確認（この開発環境からは直接参照不可）。
+
+## 次回の作業予定
+
+1. 本エントリ直後にユーザーへ提示する実装方針の承認を得る。
+2. 承認後、`services/sales_service.py`へ新関数を追加し、`pages/v3_today.py`のメトリクス表示名を「本日の受領額」に変更する。
+3. 前日/翌日除外、取消除外、複数件合算、0件、クラウド/ローカル一致のテストを追加する。
+4. テスト成功後、対象ファイルのみをコミットする。
+
+## Claude CodeからChatGPTへの申し送り
+
+「今日の受付」画面の「今日の売上」をDB基準の「本日の受領額」に変更するための調査を実施（コード変更なし）。現状はセッションローカルな`st.session_state`の合算でしかなく、DBを見ていない、別端末では反映されないことを確認。`payments`挿入経路を洗い出したところ、クラウド経路の`complete_lesson_payment`RPCは`received_date`をPostgresの`current_date`デフォルトに委ねており、アプリ内で唯一`Asia/Tokyo`を明示的に使っているのは`calendar_service.py`だけで、他はナイーブな`date.today()`に依存している、という潜在的なタイムゾーンの不整合を発見（実害は早朝時間帯に限られる可能性が高いが未確認）。既存の`dashboard_service.py`は同種の集計を持つがクラウド非対応かつデッドコードのため流用せず、クラウド対応済みの`sales_service.py`に新関数を追加する方針を提案。Supabase側の集計はDB側で日付だけ絞り込みPython側で合計する方式を推奨し、新規RPCは過剰と判断。ユーザーの承認後に実装へ進む。
+
+---
+
+# 2026-07-23 19:45
+
+## 今回実施した内容
+
+ユーザー承認を得て、「今日の受付」画面の「本日の受領額」DB化を実装した。
+
+- `services/sales_service.py`に追加:
+  - `_today_jst()`: `datetime.now(ZoneInfo('Asia/Tokyo')).date().isoformat()`。`date.today()`やDBサーバーの`current_date`に依存しない。
+  - `_payments_on(day)`: クラウド時は`.table('payments').select('amount_received').eq('received_date',day).is_('cancelled_at','null').execute().data`でDB側を日付・取消状態で絞り込み、ローカル時は同条件のSQL。新規RPCは作成していない。
+  - `daily_received_amount(day=None)`: `day`省略時は`_today_jst()`を使用し、`_payments_on(day)`の`amount_received`合計を返す。該当0件でも`sum([])`により必ず`0`を返す。
+  - `today_received_amount()`: `daily_received_amount()`のラッパー。
+- `pages/v3_today.py`を変更:
+  - `today_received_amount()`をimportし、メトリクスを「今日の売上」から**「本日の受領額」**に変更。
+  - メトリクスの下に`st.caption("本日、受領登録された金額の合計です。取消済みは含みません。")`を追加。
+  - `st.session_state[f"amount_{lesson['event_id']}"]`への書き込みを削除（メトリクスがDB参照になったため不要）。`done_{lesson['event_id']}`（受領済み表示の切替に必要）はそのまま変更していない。
+- `tests/test_sales_service.py`にテストを追加（9件）:
+  - 当日受領1件／複数件、前日・翌日除外、取消済み除外、取消後に合計が減る、0件で0円、ローカル/クラウド分岐が同一結果になること（`_FakeTable`/`_FakeClient`で`.select().eq().is_().execute()`を模したフェイククライアントを注入）、`_today_jst()`がシステム時計に依存せずAsia/Tokyoのオフセットで解決されること（`datetime`を固定UTC時刻を返すサブクラスに差し替えてテスト）。
+- 全テスト実行: **23件成功**（既存14件＋今回追加9件）。
+- Streamlit `AppTest`で`app.py`全体を実際にレンダリングし、「本日の受領額」が受領登録前は0円、登録後は実際の受領額（9,000円）に更新されることをUIレベルで確認した。`demo_acceptance.py`（既存の受入スクリプト）も再実行し、正常終了を確認した。
+
+## 追加確認: complete_lesson_payment RPCのreceived_date
+
+ユーザーからの指摘どおり、今回の集計関数（`daily_received_amount`）をJST対応しても、**登録側（`complete_lesson_payment` RPC）の`received_date`はJST対応していない**ため、根本原因は残ることを確認した。
+
+- 現状: RPCのINSERT文に`received_date`列が無く、テーブル定義の`default current_date`（Postgresサーバーのセッションタイムゾーン。Supabaseは新規プロジェクトで既定UTCのことが多い）に委ねている。
+- 影響が出る条件: JST 00:00〜08:59（UTCではまだ前日）に「受領・押印済み」を押した場合、`received_date`がJSTの実際の日付より1日前になる。この場合、その支払いは押した直後の「本日の受領額」には反映されず（受領日が「前日」として記録されるため）、翌日以降に確認しても「前日扱い」のまま補正されない。月またぎ（月末深夜〜月初早朝）では`monthly_received_amount`等の月次集計にもズレが波及する。
+- **必要性**: 完全な正確性のためには修正が必要と判断する。
+- **今回同時修正するか**: 見送り、別タスクとして報告する。理由:
+  1. `complete_lesson_payment`は本番で最も頻繁に実行される、金額登録の中核トランザクションRPCであり、ここでの実装ミスは表示上のバグより影響が大きい（記録される金額データ自体の日付がずれる）。
+  2. 修正には本番Supabaseへの新規SQLマイグレーション適用（SQL Editorでの手動実行）が必要で、この開発環境からは実行・検証ができない（認証情報なし）。
+  3. 修正方法として、(a) RPCに`p_received_date`パラメータを追加し、Python側（`v3_repository.complete()`のクラウド分岐）でJST基準の日付を明示的に渡す「限定的な修正」と、(b) Supabaseデータベース全体のタイムゾーン設定を`Asia/Tokyo`へ変更する「DB全体の設定変更」の2案があり、後者は`now()`/`current_date`に依存する他の全カラム（`created_at`、`audit_logs.action_datetime`等）にも影響する広範な変更になるため、対応する場合は(a)の限定的な修正を推奨する。
+  4. 本番SupabaseのDBタイムゾーン設定（`show timezone;`）が未確認であり、既に`Asia/Tokyo`に設定済みであれば、そもそも今回の懸念が発生しない可能性もある。まずこの確認が必要。
+  5. 影響の実害範囲は狭い（レッスンは日中に行われるため、JST深夜〜早朝に「受領・押印済み」を押すケースは稀と推測されるが、確証はない）。
+
+## 変更したファイル
+
+- `local_web_app/services/sales_service.py`
+- `local_web_app/pages/v3_today.py`
+- `local_web_app/tests/test_sales_service.py`
+- `docs/worklog.md`（本エントリ）
+
+## テスト結果
+
+- `pytest local_web_app/tests` — 23 passed（既存14件＋今回追加9件）
+- `python tests/demo_acceptance.py`（直接実行） — `DEMO_OK` で正常終了
+- Streamlit `AppTest`による`app.py`全体レンダリング確認 — 「本日の受領額」が受領登録前0円→登録後9,000円へ正しく更新されることを確認
+
+## Git
+
+- 本エントリ記録後にコミットする（正確なコミットIDは `git log -1 --oneline` を参照。`origin/main`へはpushしない）。
+
+## 決定事項
+
+- 「本日の受領額」は`services/sales_service.py`の`daily_received_amount()`/`today_received_amount()`として実装し、`Asia/Tokyo`基準・DB側での日付絞り込み・新規RPC無しの方針を確定。
+- `complete_lesson_payment` RPCの`received_date`タイムゾーン問題は、修正が必要と判断しつつも、本番トランザクションRPCへの変更・本番でしか検証できない・DBタイムゾーン設定が未確認、という理由で今回は実装せず、別タスクとして保留する。
+
+## 保留事項
+
+- `complete_lesson_payment` RPCの`received_date`をJST基準で明示する対応（別タスク）。
+- 本番SupabaseのDBタイムゾーン設定の確認（`show timezone;`）。
+- 既存の保留事項（CSV/Excel出力への請求月基準追加、`dashboard_service.py`のクラウド対応、受領取消処理の動作確認、本番実データでの40,000円問題の最終確認）は引き続き未着手。
+
+## 次回の作業予定
+
+1. 本エントリ直後のコミットを完了する。
+2. 本番Supabaseの`show timezone;`を確認する。
+3. 確認結果に応じて、`complete_lesson_payment` RPCの`received_date`をJST対応させるかどうかをユーザーと決定する。
+4. Streamlit本番環境で「本日の受領額」の表示を確認する。
+5. 既存の保留事項（受領取消処理の動作確認、CSV/Excel出力、40,000円問題の実データ最終確認）に着手する。
+
+## Claude CodeからChatGPTへの申し送り
+
+「今日の受付」画面の「本日の受領額」DB化を実装した。`services/sales_service.py`に`daily_received_amount(day=None)`（Asia/Tokyo基準、DB側で`received_date`・`cancelled_at`を絞り込み、新規RPC無し）と`today_received_amount()`を追加し、`pages/v3_today.py`のメトリクスをDB参照に切替、不要になった`session_state`の金額集計（`amount_{event_id}`）は削除（`done_{event_id}`は維持）。テスト9件を追加し全23件成功、Streamlit AppTestでも0円→9,000円の実動作を確認。ユーザーから指摘のあった「集計だけJST対応しても登録側がずれる」懸念は的中しており、`complete_lesson_payment` RPCが`received_date`をPostgresの`current_date`デフォルト任せにしている点は根本原因として残ることを確認した。ただし本番の中核トランザクションRPCへの変更は影響が大きく、本番でしか検証できない（この環境にはSupabase認証情報が無い）ため、今回は実装せず、限定的な修正案（RPCにJST日付パラメータを追加）を添えて別タスクとして報告するに留めた。

@@ -1,11 +1,31 @@
 from collections import defaultdict
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from database import query
 from services.auth_service import get_client,current_user,is_cloud_configured
+
+_JST=ZoneInfo('Asia/Tokyo')
 
 def _cloud(): return is_cloud_configured() and bool(current_user())
 def _payments():
     if _cloud(): return get_client().table('payments').select('student_id,student_name,target_month,payment_type,amount_received,received_date,cancelled_at').is_('cancelled_at','null').execute().data
     return query("SELECT student_id,student_name,target_month,payment_type,amount_received,received_date,cancelled_at FROM payments WHERE cancelled_at IS NULL")
+
+def _today_jst():
+    """date.today()やDBサーバーのcurrent_dateに依存せず、Asia/Tokyo基準の当日を返す。"""
+    return datetime.now(_JST).date().isoformat()
+
+def _payments_on(day):
+    if _cloud(): return get_client().table('payments').select('amount_received').eq('received_date',day).is_('cancelled_at','null').execute().data
+    return query("SELECT amount_received FROM payments WHERE received_date=? AND cancelled_at IS NULL",(day,))
+
+# 受領日ベース: 指定日にreceived_dateを持つ、取消されていない入金の合計。該当が無ければ0。
+def daily_received_amount(day=None):
+    day=day or _today_jst()
+    return sum(p['amount_received'] for p in _payments_on(day))
+
+def today_received_amount():
+    return daily_received_amount()
 
 # 請求月ベース: target_month（何月分の請求か）を基準に集計する。月謝管理・請求状況・未収管理向け。
 def monthly_billed_amount(target_month):

@@ -4,6 +4,7 @@ from services.auth_service import settings,current_user
 from services.calendar_service import fetch_today_events,match_students
 from services.calendar_mapping_service import get_mappings,save_mapping
 from services.v3_repository import students,charges,complete
+from services.sales_service import today_received_amount
 
 def yen(v): return f"{int(v):,}円"
 
@@ -27,7 +28,8 @@ def render(operator):
         # 当月月謝を優先し、それ以外は期限・対象順
         cs=sorted(cs,key=lambda c:(c['charge_type']!='月謝',c['target_month']))
         if st.session_state.get(f"done_{lesson['event_id']}"): done+=1
-    m=st.columns(4); m[0].metric("今日のレッスン",f"{len(lessons)}名"); m[1].metric("今日の受領済",f"{done}名"); m[2].metric("未受領",f"{max(payable-done,0)}名"); m[3].metric("今日の売上",yen(sum(st.session_state.get(f"amount_{x['event_id']}",0) for x in lessons)))
+    m=st.columns(4); m[0].metric("今日のレッスン",f"{len(lessons)}名"); m[1].metric("今日の受領済",f"{done}名"); m[2].metric("未受領",f"{max(payable-done,0)}名"); m[3].metric("本日の受領額",yen(today_received_amount()))
+    st.caption("本日、受領登録された金額の合計です。取消済みは含みません。")
     if not lessons: st.success("今日のレッスン予定はありません。"); return
     for lesson in lessons:
         with st.container(border=True):
@@ -58,5 +60,5 @@ def render(operator):
             if st.session_state.get(f"done_{lesson['event_id']}"): st.success("✅ 受領・押印済み")
             elif st.button("受領・押印済み",key=f"complete_{lesson['event_id']}",type="primary",use_container_width=True):
                 try:
-                    pid=complete(c,student,method,operator,lesson['event_id']); st.session_state[f"done_{lesson['event_id']}"]=pid; st.session_state[f"amount_{lesson['event_id']}"]=c['charge_amount']-c.get('paid',0); st.rerun()
+                    pid=complete(c,student,method,operator,lesson['event_id']); st.session_state[f"done_{lesson['event_id']}"]=pid; st.rerun()
                 except Exception as e: st.error(f"登録できませんでした: {e}")

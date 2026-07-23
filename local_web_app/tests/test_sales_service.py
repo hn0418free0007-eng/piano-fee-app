@@ -1,9 +1,15 @@
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from database import query
 from services.student_service import save_student
 from services.charge_service import create_monthly, open_charges
-from services.payment_service import register_payment
+from services.payment_service import register_payment, cancel_payment
+import services.sales_service as sales_service
 from services.sales_service import (monthly_billed_amount, monthly_received_amount,
   yearly_billed_amount, yearly_received_amount,
-  student_yearly_billed_amount, student_yearly_received_amount)
+  student_yearly_billed_amount, student_yearly_received_amount,
+  daily_received_amount)
 
 FEE = 10000
 
@@ -71,3 +77,112 @@ def test_yearly_and_student_yearly_basis_match_monthly_breakdown(isolated_db):
     student_received = {r["月"]: r["金額"] for r in student_yearly_received_amount(2026)}
     assert student_billed[6] == FEE and student_billed[7] == FEE and student_billed[8] == FEE
     assert student_received[7] == FEE * 3
+
+
+# --- daily_received_amount / today_received_amount（本日の受領額）---
+
+def _charges_for_months(sid, months):
+    for month in months:
+        create_monthly(month, f"{month}-27", "試験")
+    return {m: _charge_for(sid, m) for m in months}
+
+def test_daily_received_amount_single_payment(isolated_db):
+    sid = _setup_student()
+    charges = _charges_for_months(sid, ["2026-07"])
+    register_payment(charges["2026-07"]["charge_id"], FEE, "2026-07-10", "現金", "試験")
+    assert daily_received_amount("2026-07-10") == FEE
+
+def test_daily_received_amount_multiple_payments_same_day(isolated_db):
+    sid = _setup_student()
+    charges = _charges_for_months(sid, ["2026-06", "2026-07"])
+    register_payment(charges["2026-06"]["charge_id"], FEE, "2026-07-10", "現金", "試験")
+    register_payment(charges["2026-07"]["charge_id"], FEE, "2026-07-10", "現金", "試験")
+    assert daily_received_amount("2026-07-10") == FEE * 2
+
+def test_daily_received_amount_excludes_previous_day(isolated_db):
+    sid = _setup_student()
+    charges = _charges_for_months(sid, ["2026-07"])
+    register_payment(charges["2026-07"]["charge_id"], FEE, "2026-07-09", "現金", "試験")
+    assert daily_received_amount("2026-07-10") == 0
+
+def test_daily_received_amount_excludes_next_day(isolated_db):
+    sid = _setup_student()
+    charges = _charges_for_months(sid, ["2026-07"])
+    register_payment(charges["2026-07"]["charge_id"], FEE, "2026-07-11", "現金", "試験")
+    assert daily_received_amount("2026-07-10") == 0
+
+def test_daily_received_amount_excludes_cancelled(isolated_db):
+    sid = _setup_student()
+    charges = _charges_for_months(sid, ["2026-07"])
+    pid = register_payment(charges["2026-07"]["charge_id"], FEE, "2026-07-10", "現金", "試験")
+    cancel_payment(pid, "テスト取消", "試験")
+    assert daily_received_amount("2026-07-10") == 0
+
+def test_daily_received_amount_decreases_after_cancellation(isolated_db):
+    sid = _setup_student()
+    charges = _charges_for_months(sid, ["2026-06", "2026-07"])
+    kept = register_payment(charges["2026-06"]["charge_id"], FEE, "2026-07-10", "現金", "試験")
+    to_cancel = register_payment(charges["2026-07"]["charge_id"], FEE, "2026-07-10", "現金", "試験")
+    assert daily_received_amount("2026-07-10") == FEE * 2
+    cancel_payment(to_cancel, "テスト取消", "試験")
+    assert daily_received_amount("2026-07-10") == FEE
+
+def test_daily_received_amount_zero_when_no_payments(isolated_db):
+    assert daily_received_amount("2026-07-10") == 0
+
+
+class _FakeTable:
+    """Supabase Python clientの.table().select().eq().is_().execute()を模倣するフェイク。"""
+    def __init__(self, rows): self._rows = list(rows)
+    def select(self, *_args, **_kwargs): return self
+    def eq(self, col, val):
+        self._rows = [r for r in self._rows if r.get(col) == val]; return self
+    def is_(self, col, val):
+        want_null = (val == 'null')
+        self._rows = [r for r in self._rows if (r.get(col) is None) == want_null]; return self
+    def execute(self): return SimpleNamespace(data=self._rows)
+
+class _FakeClient:
+    def __init__(self, rows): self._rows = rows
+    def table(self, _name): return _FakeTable(self._rows)
+
+def test_daily_received_amount_same_result_local_and_cloud_branch(isolated_db, monkeypatch):
+    """
+    同一データに対して、ローカルSQLite経路とSupabaseクラウド経路（フェイククライアント）が
+    同じ結果を返すことを検証する。実際のSupabase接続は行わない。
+    """
+    sid = _setup_student()
+    charges = _charges_for_months(sid, ["2026-06", "2026-07", "2026-08"])
+    register_payment(charges["2026-06"]["charge_id"], FEE, "2026-07-09", "現金", "試験")   # 前日
+    register_payment(charges["2026-07"]["charge_id"], FEE, "2026-07-10", "現金", "試験")   # 当日・残す
+    cancelled = register_payment(charges["2026-08"]["charge_id"], FEE, "2026-07-10", "現金", "試験")  # 当日・取消
+    cancel_payment(cancelled, "テスト取消", "試験")
+
+    local_total = daily_received_amount("2026-07-10")
+    assert local_total == FEE  # 前日分は除外、取消分は除外、当日1件のみ残る
+
+    raw_rows = query("SELECT amount_received, received_date, cancelled_at FROM payments")
+    fake_client = _FakeClient(raw_rows)
+    monkeypatch.setattr(sales_service, "is_cloud_configured", lambda: True)
+    monkeypatch.setattr(sales_service, "current_user", lambda: {"email": "teacher@example.com"})
+    monkeypatch.setattr(sales_service, "get_client", lambda: fake_client)
+
+    cloud_total = daily_received_amount("2026-07-10")
+    assert cloud_total == local_total == FEE
+
+
+class _FixedDatetime(datetime):
+    """テスト実行環境のタイムゾーンに関係なく、固定のUTC時刻を返すdatetime差し替え用。"""
+    @classmethod
+    def now(cls, tz=None):
+        fixed_utc = datetime(2026, 7, 23, 23, 30, tzinfo=timezone.utc)
+        return fixed_utc.astimezone(tz) if tz else fixed_utc
+
+def test_today_jst_resolves_by_asia_tokyo_offset_not_system_clock(monkeypatch):
+    """
+    UTC 2026-07-23 23:30は、Asia/Tokyo（UTC+9）では既に2026-07-24 08:30。
+    date.today()やDBサーバーのcurrent_dateのような、実行環境のタイムゾーンに
+    依存した日付ではなく、Asia/Tokyoへ変換した日付が返ることを確認する。
+    """
+    monkeypatch.setattr(sales_service, "datetime", _FixedDatetime)
+    assert sales_service._today_jst() == "2026-07-24"
