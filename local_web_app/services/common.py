@@ -17,6 +17,12 @@ def previous_month_end(target_month):
     if m<1: y-=1; m=12
     return date(y,m,monthrange(y,m)[1])
 
+def shift_month(year_month,n):
+    """'YYYY-MM'にnか月を加減した'YYYY-MM'を返す（年またぎ・マイナスも可）。"""
+    y,m=int(year_month[:4]),int(year_month[5:7])
+    idx=y*12+(m-1)+n
+    return f"{idx//12:04d}-{idx%12+1:02d}"
+
 def next_jan31(today=None):
     """本日を基準に「次に来る1月31日」をdateで返す。1月中はその年の1月31日、2月以降は翌年の1月31日。"""
     today=today or today_jst()

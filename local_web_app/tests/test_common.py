@@ -41,3 +41,16 @@ def test_next_jan31_from_other_months_is_next_year():
 def test_next_jan31_defaults_to_today_jst(monkeypatch):
     monkeypatch.setattr(common, "datetime", _FixedDatetime)
     assert common.next_jan31() == date(2027, 1, 31)
+
+def test_shift_month_forward_within_year():
+    assert common.shift_month("2026-07", 1) == "2026-08"
+    assert common.shift_month("2026-07", 2) == "2026-09"
+
+def test_shift_month_forward_across_year_boundary():
+    assert common.shift_month("2026-12", 1) == "2027-01"
+
+def test_shift_month_backward_across_year_boundary():
+    assert common.shift_month("2026-01", -1) == "2025-12"
+
+def test_shift_month_zero_is_identity():
+    assert common.shift_month("2026-07", 0) == "2026-07"

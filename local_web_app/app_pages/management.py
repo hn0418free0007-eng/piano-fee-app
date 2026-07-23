@@ -2,14 +2,19 @@ from datetime import date
 import streamlit as st
 from services.student_service import list_students,save_student,change_status
 from services.charge_service import create_monthly,create_recital
-from services.common import previous_month_end,next_jan31
+from services.common import previous_month_end,next_jan31,shift_month
 
 def money(v): return f"{int(v):,}円"
 SCHOOLS=["中央教室","東教室","西教室","オンライン"]
 GRADES=["未就学","小学1年","小学2年","小学3年","小学4年","小学5年","小学6年","中学1年","中学2年","中学3年","高校1年","高校2年","高校3年","社会人"]
-def month_choices():
-    y=date.today().year
-    return [f"{yy}-{m:02d}" for yy in range(y-1,y+2) for m in range(1,13)]
+def month_choices(today=None):
+    """当年1月から、当月の2か月先（翌々月）までを選択肢にする。
+    例: 本日2026-07なら2026-01〜2026-09。"""
+    today=today or date.today()
+    start=f"{today.year:04d}-01"; end=shift_month(f"{today.year:04d}-{today.month:02d}",2)
+    months=[]; cur=start
+    while cur<=end: months.append(cur); cur=shift_month(cur,1)
+    return months
 def month_label(v):
     y,m=v.split('-'); return f"{y}年{int(m)}月"
 
@@ -39,11 +44,13 @@ def render_students(operator):
 
 def render_monthly(operator):
     st.title("月次請求作成")
-    months=month_choices(); current=date.today().strftime('%Y-%m'); target=st.selectbox("対象年月",months,index=months.index(current),format_func=month_label)
+    months=month_choices(); default_target=shift_month(date.today().strftime('%Y-%m'),1)
+    target=st.selectbox("レッスン料の対象月",months,index=months.index(default_target),format_func=month_label)
     if st.session_state.get('_monthly_due_target')!=target:
         st.session_state['monthly_due']=previous_month_end(target); st.session_state['_monthly_due_target']=target
     due=st.date_input("支払期限",key='monthly_due')
-    st.caption("初期値は対象月の前月末です。")
+    due_default=previous_month_end(target)
+    st.caption(f"例：{int(target[:4])}年{int(target[5:7])}月分のレッスン料は、{due_default.year}年{due_default.month}月{due_default.day}日が支払期限です。")
     students=list_students(status='在籍'); st.info(f"対象 {len(students)}人 / 請求予定合計 {money(sum(s['monthly_fee'] for s in students))}")
     if st.checkbox("対象人数と金額を確認しました") and st.button(f"{int(target[5:])}月請求作成",type="primary",use_container_width=True):
         r=create_monthly(target,due.isoformat(),operator); st.success(f"新規作成 {r['created']}件 / 重複スキップ {r['skipped']}件 / 請求総額 {money(r['total'])}")
