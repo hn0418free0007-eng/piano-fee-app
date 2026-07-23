@@ -5,7 +5,7 @@ from services.student_service import save_student
 from services.charge_service import create_monthly,open_charges
 from services.payment_service import history
 from services.v3_repository import complete
-from services.sales_service import monthly_sales,yearly_sales,student_yearly_sales
+from services.sales_service import monthly_received_amount,yearly_received_amount,student_yearly_received_amount
 from services.export_service import to_csv,to_excel
 
 def test_calendar_to_sales_export(isolated_db,monkeypatch):
@@ -18,9 +18,9 @@ def test_calendar_to_sales_export(isolated_db,monkeypatch):
     monkeypatch.setattr('services.v3_repository.cloud_active',lambda:False)
     charge=open_charges(sid)[0]; complete(charge,dict(s,student_id=sid),'現金','先生',events[0]['event_id'])
     assert history({'name':'カレンダー生徒'})[0]['payment_status']=='処理完了'
-    month=date.today().strftime('%Y-%m'); rows=monthly_sales(month); assert rows[0]['売上金額']==12000
-    assert sum(r['売上金額'] for r in yearly_sales(date.today().year))>=12000
-    assert student_yearly_sales(date.today().year)[0]['生徒名']=='カレンダー生徒'
+    month=date.today().strftime('%Y-%m'); rows=monthly_received_amount(month); assert rows[0]['金額']==12000
+    assert sum(r['金額'] for r in yearly_received_amount(date.today().year))>=12000
+    assert student_yearly_received_amount(date.today().year)[0]['生徒名']=='カレンダー生徒'
     assert to_csv(rows).startswith(b'\xef\xbb\xbf') and to_excel(rows).startswith(b'PK')
     # 全角空白・連続空白・安全な接尾語を正規化する。
     assert normalize_title('  カレンダー生徒　 レッスン  ')=='カレンダー生徒'

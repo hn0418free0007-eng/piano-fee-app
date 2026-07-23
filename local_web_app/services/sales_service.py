@@ -7,28 +7,51 @@ def _payments():
     if _cloud(): return get_client().table('payments').select('student_id,student_name,target_month,payment_type,amount_received,received_date,cancelled_at').is_('cancelled_at','null').execute().data
     return query("SELECT student_id,student_name,target_month,payment_type,amount_received,received_date,cancelled_at FROM payments WHERE cancelled_at IS NULL")
 
-def monthly_sales(year_month):
+# 請求月ベース: target_month（何月分の請求か）を基準に集計する。月謝管理・請求状況・未収管理向け。
+def monthly_billed_amount(target_month):
     totals=defaultdict(int)
     for p in _payments():
-        if str(p['received_date'])[:7]==year_month: totals[(p['student_name'],p['payment_type'])]+=p['amount_received']
-    return [{'生徒名':k[0],'請求種別':k[1],'売上金額':v} for k,v in sorted(totals.items())]
+        if p['target_month']==target_month: totals[(p['student_name'],p['payment_type'])]+=p['amount_received']
+    return [{'生徒名':k[0],'請求種別':k[1],'金額':v} for k,v in sorted(totals.items())]
 
-def yearly_sales(year):
+# 受領日ベース: received_date（実際に受け取った日）を基準に集計する。入金実績・現金管理向け。
+def monthly_received_amount(received_month):
+    totals=defaultdict(int)
+    for p in _payments():
+        if str(p['received_date'])[:7]==received_month: totals[(p['student_name'],p['payment_type'])]+=p['amount_received']
+    return [{'生徒名':k[0],'請求種別':k[1],'金額':v} for k,v in sorted(totals.items())]
+
+def yearly_billed_amount(year):
+    totals=defaultdict(int)
+    for p in _payments():
+        tm=str(p['target_month'])
+        if tm[:4]==str(year): totals[int(tm[5:7])]+=p['amount_received']
+    return [{'月':m,'金額':totals[m]} for m in range(1,13)]
+
+def yearly_received_amount(year):
     totals=defaultdict(int)
     for p in _payments():
         d=str(p['received_date'])
         if d[:4]==str(year): totals[int(d[5:7])]+=p['amount_received']
-    return [{'月':m,'売上金額':totals[m]} for m in range(1,13)]
+    return [{'月':m,'金額':totals[m]} for m in range(1,13)]
 
-def student_yearly_sales(year):
+def student_yearly_billed_amount(year):
+    totals=defaultdict(int)
+    for p in _payments():
+        tm=str(p['target_month'])
+        if tm[:4]==str(year): totals[(p['student_name'],int(tm[5:7]))]+=p['amount_received']
+    return [{'生徒名':k[0],'月':k[1],'金額':v} for k,v in sorted(totals.items())]
+
+def student_yearly_received_amount(year):
     totals=defaultdict(int)
     for p in _payments():
         d=str(p['received_date'])
         if d[:4]==str(year): totals[(p['student_name'],int(d[5:7]))]+=p['amount_received']
-    return [{'生徒名':k[0],'月':k[1],'売上金額':v} for k,v in sorted(totals.items())]
+    return [{'生徒名':k[0],'月':k[1],'金額':v} for k,v in sorted(totals.items())]
 
-def recital_sales(year_or_event=''):
+# 発表会費は開催（＝target_month）に紐づく請求であり、受領日ベースの区別は行わない。
+def recital_billed_amount(year_or_event=''):
     totals=defaultdict(int)
     for p in _payments():
         if p['payment_type']=='発表会費' and (not year_or_event or year_or_event in p['target_month']): totals[(p['target_month'],p['student_name'])]+=p['amount_received']
-    return [{'開催名':k[0],'生徒名':k[1],'売上金額':v} for k,v in sorted(totals.items())]
+    return [{'開催名':k[0],'生徒名':k[1],'金額':v} for k,v in sorted(totals.items())]

@@ -11,7 +11,7 @@ os.environ['PIANO_DB_PATH']=str(tmp)
 
 from database import init_db,connect
 from services.charge_service import create_monthly
-from services.sales_service import monthly_sales
+from services.sales_service import monthly_received_amount
 from services.export_service import to_csv,to_excel
 from datetime import date
 from streamlit.testing.v1 import AppTest
@@ -28,8 +28,8 @@ with connect() as con:
     assert payment and payment['stamp_confirmed']==1 and payment['payment_status']=='処理完了'
     charge=con.execute("SELECT charge_status FROM charges WHERE charge_id=?",(payment['charge_id'],)).fetchone()
     assert charge['charge_status']=='入金済'
-rows=monthly_sales(month); assert rows and sum(r['売上金額'] for r in rows)>0
+rows=monthly_received_amount(month); assert rows and sum(r['金額'] for r in rows)>0
 assert to_csv(rows).startswith(b'\xef\xbb\xbf') and to_excel(rows).startswith(b'PK')
-print(f"DEMO_OK lessons={len(app.title)} payment_id={payment['payment_id']} sales={sum(r['売上金額'] for r in rows)} csv=OK excel=OK")
+print(f"DEMO_OK lessons={len(app.title)} payment_id={payment['payment_id']} sales={sum(r['金額'] for r in rows)} csv=OK excel=OK")
 try: tmp.unlink(missing_ok=True)
 except PermissionError: pass  # WindowsではAppTest終了まで読取ハンドルが残ることがある

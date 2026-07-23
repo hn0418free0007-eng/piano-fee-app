@@ -41,7 +41,7 @@ def render_daily():
 
 def render_exports(operator):
     st.title("データ出力・バックアップ")
-    kind=st.selectbox("出力データ",["生徒一覧","入金履歴","月別売上一覧","年間売上一覧","操作履歴"]); rows=dataset(kind); st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True); downloads(rows,kind)
+    kind=st.selectbox("出力データ",["生徒一覧","入金履歴","受領月別一覧（受領日基準）","受領年別一覧（受領日基準）","操作履歴"]); rows=dataset(kind); st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True); downloads(rows,kind)
     st.divider()
     if st.button("今すぐデータベースをバックアップ",type="primary"):
         try: st.success(f"バックアップしました: {create_backup(operator).name}")

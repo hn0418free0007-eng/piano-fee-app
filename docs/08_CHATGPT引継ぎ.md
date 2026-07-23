@@ -5,7 +5,7 @@
 > 担当者は人間・ChatGPT・Codex・Claude Codeなどを問いません。
 > コードを変更する前に、必ず本ファイルと `docs/04_PROJECT_STATUS.md` を読み、現在の状態を理解してから作業を開始してください。
 
-最終更新日: 2026-07-23
+最終更新日: 2026-07-23（売上集計の請求月／受領日基準分離を実装）
 
 ## この文書の目的
 
@@ -109,7 +109,7 @@ piano-fee-app/
 | `services/payment_service.py` | 入金登録、押印、取消 |
 | `services/charge_service.py` | 月謝・発表会費請求 |
 | `services/student_service.py` | 生徒追加・更新・在籍状態 |
-| `services/sales_service.py` | 売上集計。40,000円問題の原因箇所（`received_date`基準で集計し`target_month`を見ていない） |
+| `services/sales_service.py` | 売上集計。請求月基準（`*_billed_amount`）と受領日基準（`*_received_amount`）を分離して提供する |
 | `services/export_service.py` | CSV・Excel出力 |
 | `services/backup_service.py` | ローカルSQLiteバックアップ |
 | `migrate_to_supabase.py` | SQLite移行とIdentity Sequence同期呼出し |
@@ -157,6 +157,7 @@ piano-fee-app/
 - `docs/` のGitHubへのpush
 - ローカルデモと自動テスト
 - 作業履歴管理（`docs/worklog.md`）の運用開始
+- 売上40,000円問題の修正（請求月基準／受領日基準の分離。ローカル・UIで解消を確認済み、本番実データでの最終確認は次回）
 
 ## 動作確認済み
 
@@ -167,46 +168,35 @@ piano-fee-app/
 - 受領後、受領済み1名になる
 - 受領後、未受領0名になる
 - Identity Sequence同期テスト4件が成功する
-- 全体テストスイート12件が成功する
+- 全体テストスイート14件が成功する（既存12件＋売上集計の前受金・後払いテスト2件）
+- Streamlit AppTestで売上管理画面の集計基準切替（請求月別⇄受領月別）を確認する
 
 ## 未完成機能・未確認事項
 
-- 売上管理・確定申告画面の集計ロジック修正（原因特定済み、修正方針は承認待ち）
+- 本番Supabase実データでの40,000円内訳の最終確認
+- CSV/Excel出力（`export_service.dataset()`）へ請求月基準の出力を追加するかどうかの検討
+- 「今日の受付」画面の「今日の売上」をDBの受領日基準へ変更する対応（別タスク、詳細は下記）
+- `services/dashboard_service.py`のSupabaseクラウド対応（現状デッドコードのため緊急ではない）
 - 受領取消処理の動作確認
-- CSV出力の確認・改善
-- Excel出力の確認・改善
+- Excel出力の確認・改善（売上以外の出力項目）
 - 本番データでの総合運用テスト
 - `docs/01_URL一覧.md` の本番URL・Project名の未設定部分の追記
-- Streamlit本番環境でのブラウザ確認（売上問題の修正方針確定後に実施）
+- Streamlit本番環境でのブラウザ確認
 
 ## 既知の問題
 
-### 売上管理・確定申告画面が40,000円と表示される（原因特定済み・修正未適用）
+### 売上管理・確定申告画面が40,000円と表示される（コード対応済み・本番実データでの最終確認待ち）
 
-確認済み:
+原因は、`services/sales_service.py` の集計関数が `received_date`（受領日）の年月だけで対象月を判定し、`target_month`（請求対象月）を無視していたことです。前受金（翌月分を当月中に受領）や後払いがあると、実際の請求額より多く表示されます。ローカルデモDBで再現し、本番報告の「22,000円」という内訳と数値的に一致する構造であることを確認済みです（詳細・再現条件は `docs/worklog.md` の2026-07-23エントリを参照）。
 
-- 9,000円の受領登録は正常
-- 今日の受付画面では売上9,000円
-- 売上管理・確定申告画面では40,000円
-- 内訳として22,000円と18,000円が見えていた
+対応として、「請求月ベース（target_month）」と「受領日ベース（received_date）」を統一せず、明確に区別して両方確認できるようにしました。
 
-#### 原因（コードレベルで特定済み）
+- `services/sales_service.py`: `monthly_sales`→`monthly_billed_amount`（請求月基準）／`monthly_received_amount`（受領月基準）に分割。`yearly_sales`・`student_yearly_sales`も同様。`recital_sales`は`recital_billed_amount`に改名（ロジック変更なし、発表会費は開催＝target_month基準）。
+- `pages/sales.py`: 「月別集計」「年間集計」「生徒別年間集計」タブに集計基準の切替ラジオボタンとキャプションを追加。
+- `services/export_service.py` / `pages/reports.py`: 管理画面のCSV/Excel出力は受領日基準であることを列名・選択肢名で明示（ロジックは未変更）。
+- 前受金・後払いを含む回帰テスト（`tests/test_sales_service.py`）を追加し、全14テストが成功。Streamlit AppTestでも請求月基準10,000円／受領月基準30,000円と正しく切り替わることを確認済み。
 
-「今日の受付」の「今日の売上」（`pages/v3_today.py`）は、そのブラウザセッション中に受領した分だけを `st.session_state` で合算した値であり、DBには問い合わせていません。一方、「月別売上」（`services/sales_service.py` の `monthly_sales`）は、`payments` テーブルから `cancelled_at is null` の全行を取得し、**`received_date`（受領日）の年月**が一致する行を合算しています。**`target_month`（請求対象月）は見ていません。**
-
-このため、前受金（翌月分を当月中に受領）や後払いの回収、未取消のテスト入金などが同じ暦月に存在すると、「月別売上」は本来のその月の請求額より大きく表示されます。
-
-ローカルデモDBで再現し、以下のとおり確認済みです（実行結果）。
-
-```text
-monthly_sales('2026-07') の結果:
-{'生徒名': 'あおぞら かなで', '請求種別': '月謝', '売上金額': 22000}
-{'生徒名': 'さくら みらい', '請求種別': '月謝', '売上金額': 9000}
-```
-
-「あおぞら かなで」は7月分月謝11,000円のところ、8月分月謝（前払い、`target_month='2026-08'`）を7月中に受領していたため、7月の売上に22,000円として合算されました。本番報告の「22,000円」という内訳と数値的に一致する構造です。
-
-本番Supabaseの実データはこの開発環境から直接参照できないため（認証情報なし）、実データでの完全な内訳確認は次のSQLをSupabase SQL Editorで実行して行う必要があります。
+本番Supabaseの実データはこの開発環境から直接参照できないため（認証情報なし）、40,000円（22,000円＋18,000円）の実データ内訳は未確認です。次回、次のSQLをSupabase SQL Editorで実行して最終確認してください。
 
 ```sql
 select
@@ -219,9 +209,11 @@ where cancelled_at is null
 order by student_name, received_date;
 ```
 
-詳細な調査経緯は `docs/04_PROJECT_STATUS.md` の「既知の問題」および `docs/worklog.md` の2026-07-23エントリを参照してください。
+#### 保留とした対応（別タスク）
 
-修正方針・実装前に、原因、対象ファイル、修正方針をユーザーへ説明し、承認を得ます。
+- CSV/Excel出力へ請求月基準の出力を追加するかどうか。
+- 「今日の受付」画面（`pages/v3_today.py`）の「今日の売上」は、現在ブラウザセッション中の`st.session_state`だけを合算しておりDBを参照していません。DB（`received_date`）基準への変更は影響分析のみ行い、実装は見送りました。理由: 既存の`services/dashboard_service.py`（`today_amount`等、同様の集計を持つ）がSupabaseクラウド非対応（`is_cloud_configured()`分岐が無くローカルSQLite固定）であり、単純な流用ができないためです。加えて`pages/dashboard.py`・`reports.render_daily()`は現在`app.py`から呼ばれていないデッドコードであることも判明しました。
+- `services/dashboard_service.py`のクラウド対応（現状デッドコードのため緊急ではない）。
 
 ## 今回までの重要な修正
 
@@ -272,11 +264,10 @@ order by student_name, received_date;
 
 ## 現在のGit状態
 
-- `git status`: クリーン（`nothing to commit, working tree clean`）
-- `main` は `origin/main` と同期済みです。
-- 最新コミット: `11ec903131cc1368e5e1759b13fe0a83f5be8911`（`Add Supabase identity sequence synchronization`、2026-07-23 14:45）
-
-未コミットの変更はありません。今回のドキュメント更新・売上調査結果は、ユーザーの承認を得るまでコミットしません。
+- ドキュメント整合性修正: コミット `15c0b2b`（`Sync docs with actual git state and start worklog`）
+- 売上集計の請求月／受領日基準分離: 直後の別コミットとして反映済み（正確なコミットIDは `git log -1 --oneline` で確認してください）
+- この時点で `origin/main` へは未pushです（pushはユーザーの明示的な指示があるまで行いません）。
+- 作業終了時は必ず `git status` で `nothing to commit` になっていることを確認します。
 
 ## 次回再開時の手順
 
@@ -294,36 +285,7 @@ order by student_name, received_date;
 まず docs/08_CHATGPT引継ぎ.md、docs/04_PROJECT_STATUS.md、docs/worklog.md を読んでください。現在のGit状態と次回最優先事項を確認し、作業前に実施内容を短く報告してください。
 ```
 
-### STEP 2: 売上集計修正の承認を得る
-
-`docs/04_PROJECT_STATUS.md` の「既知の問題」に記載した原因と修正方針をユーザーへ提示し、承認を得るまでコードを変更しません。
-
-### STEP 3: 承認された方針で修正・テストする
-
-`services/sales_service.py` を修正し、前受金・後払いケースを含む回帰テストを追加して実行します。
-
-```powershell
-.\local_web_app\.venv\Scripts\python.exe -m pytest local_web_app/tests
-```
-
-失敗した場合、原因を調べる前に大量修正しません。失敗内容、原因候補、必要な変更を説明します。
-
-### STEP 4: 必要な変更だけコミットする
-
-```powershell
-git status
-git diff
-git add <対象ファイル>
-git diff --cached
-git commit -m "<内容に応じたメッセージ>"
-git push origin main
-git status
-git log -1 --oneline
-```
-
-`git diff --cached` に無関係なファイルがあればコミットしません。
-
-### STEP 5: Streamlit本番環境を確認する
+### STEP 2: Streamlit本番環境を確認する
 
 Community Cloudの本番アプリを開き、次を順番に確認します。
 
@@ -332,14 +294,16 @@ Community Cloudの本番アプリを開き、次を順番に確認します。
 3. Google Calendarを取得できる
 4. 今日の受付画面が表示される
 5. 受領登録ができる
-6. 売上管理・確定申告画面の表示が正しい
+6. 売上管理・確定申告画面（請求月別／受領月別の切替）の表示が正しい
 7. エラーが表示されない
 
 本番URLが `docs/01_URL一覧.md` で未設定なら、確認できた時点で追記します。URLだけを記載し、Secretは書きません。
 
-### STEP 6: 受領取消処理を確認する
+### STEP 3: 本番Supabaseで40,000円問題の実データを最終確認する
 
-売上問題の修正確認後にテストします。
+`docs/04_PROJECT_STATUS.md`「既知の問題」記載の確認用SQLをSupabase SQL Editorで実行し、内訳が前受金・後払いの混入によるものかを確認します。
+
+### STEP 4: 受領取消処理を確認する
 
 確認項目:
 
@@ -352,7 +316,13 @@ Community Cloudの本番アプリを開き、次を順番に確認します。
 
 テストデータと本番データを混同しません。データ操作前に対象を確認します。
 
-### STEP 7: ドキュメントを更新する
+### STEP 5: 保留事項を検討する
+
+- CSV/Excel出力へ請求月基準の出力を追加するかどうか
+- 「今日の受付」画面の「今日の売上」をDBの受領日基準へ変更する対応
+- `services/dashboard_service.py`のSupabaseクラウド対応
+
+### STEP 6: ドキュメントを更新する
 
 作業終了前に必ず更新します。
 
@@ -427,6 +397,6 @@ Community Cloudの本番アプリを開き、次を順番に確認します。
 - [ ] `docs/worklog.md` の最新エントリを読んだ
 - [ ] `git status` を確認した
 - [ ] `git diff` と新規ファイルを確認した
-- [ ] 売上40,000円問題の原因（`received_date`基準集計）と修正が承認待ちであることを把握した
+- [ ] 売上40,000円問題は請求月／受領日基準の分離で対応済みで、本番実データでの最終確認が次回優先事項であることを把握した
 - [ ] 関連テストを実行する準備ができた
 - [ ] 作業前に実施内容を短く報告した
