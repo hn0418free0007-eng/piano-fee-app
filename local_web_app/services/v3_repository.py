@@ -1,7 +1,7 @@
 from __future__ import annotations
-from datetime import date,datetime
 from database import connect,now
 from services.auth_service import get_client,is_cloud_configured,current_user
+from services.common import today_jst
 from services.student_service import list_students
 from services.charge_service import open_charges
 from services.payment_service import register_payment,confirm_stamp
@@ -23,7 +23,7 @@ def complete(charge,student,method,operator,event_id=None):
     amount=int(charge['charge_amount']-charge.get('paid',0))
     if cloud_active():
         result=get_client().rpc('complete_lesson_payment',{'p_charge_id':charge['charge_id'],'p_payment_method':method,
-          'p_received_by':operator,'p_calendar_event_id':event_id}).execute()
+          'p_received_by':operator,'p_calendar_event_id':event_id,'p_received_date':today_jst()}).execute()
         return int(result.data)
-    pid=register_payment(charge['charge_id'],amount,date.today().isoformat(),method,operator,f'Google Calendar: {event_id or "なし"}')
+    pid=register_payment(charge['charge_id'],amount,today_jst(),method,operator,f'Google Calendar: {event_id or "なし"}')
     confirm_stamp(pid,operator); return pid

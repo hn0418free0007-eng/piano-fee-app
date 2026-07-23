@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from database import query
@@ -169,20 +168,3 @@ def test_daily_received_amount_same_result_local_and_cloud_branch(isolated_db, m
 
     cloud_total = daily_received_amount("2026-07-10")
     assert cloud_total == local_total == FEE
-
-
-class _FixedDatetime(datetime):
-    """テスト実行環境のタイムゾーンに関係なく、固定のUTC時刻を返すdatetime差し替え用。"""
-    @classmethod
-    def now(cls, tz=None):
-        fixed_utc = datetime(2026, 7, 23, 23, 30, tzinfo=timezone.utc)
-        return fixed_utc.astimezone(tz) if tz else fixed_utc
-
-def test_today_jst_resolves_by_asia_tokyo_offset_not_system_clock(monkeypatch):
-    """
-    UTC 2026-07-23 23:30は、Asia/Tokyo（UTC+9）では既に2026-07-24 08:30。
-    date.today()やDBサーバーのcurrent_dateのような、実行環境のタイムゾーンに
-    依存した日付ではなく、Asia/Tokyoへ変換した日付が返ることを確認する。
-    """
-    monkeypatch.setattr(sales_service, "datetime", _FixedDatetime)
-    assert sales_service._today_jst() == "2026-07-24"

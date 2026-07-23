@@ -4,7 +4,22 @@
 
 Supabase SQL Editorで使う確認・保守SQLです。実行前に対象Projectを必ず確認してください。
 
-最終更新日: 2026-07-17
+最終更新日: 2026-07-23
+
+## 0. complete_lesson_payment のreceived_date JST対応
+
+`local_web_app/supabase_received_date_jst_fix.sql` を実行すると、`complete_lesson_payment` の`received_date`が`current_date`（DBサーバーのタイムゾーン）任せから、呼び出し側（Python）でAsia/Tokyo基準に解決した日付を渡せる5引数版に置き換わります。旧4引数版は`DROP FUNCTION IF EXISTS`で削除されるため、実行後は必ず次で5引数版が1つだけであることを確認してください。
+
+```sql
+select proname, pg_get_function_identity_arguments(oid)
+from pg_proc where proname='complete_lesson_payment';
+```
+
+DBのタイムゾーン設定自体の確認:
+
+```sql
+show timezone;
+```
 
 ## 1. Identity Sequence同期
 

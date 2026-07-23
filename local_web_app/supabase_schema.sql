@@ -88,8 +88,11 @@ end $$;
 revoke all on function sync_migration_identity_sequences() from public;
 grant execute on function sync_migration_identity_sequences() to service_role;
 
+-- p_received_dateは呼び出し側（Python）でAsia/Tokyo基準に解決した日付を渡す。
+-- 未指定時のみcurrent_date（DBサーバーのタイムゾーン）にフォールバックする。
 create or replace function complete_lesson_payment(
- p_charge_id bigint,p_payment_method text,p_received_by text,p_calendar_event_id text default null
+ p_charge_id bigint,p_payment_method text,p_received_by text,p_calendar_event_id text default null,
+ p_received_date date default null
 ) returns bigint language plpgsql security invoker as $$
 declare c charges%rowtype; paid integer; remaining integer; new_id bigint;
 begin
@@ -99,9 +102,9 @@ begin
  remaining:=c.charge_amount-paid;
  if remaining<=0 then raise exception 'この請求はすでに受領済みです'; end if;
  insert into payments(charge_id,student_id,student_name,target_month,payment_type,charge_amount,amount_received,
-  payment_method,received_by,stamp_confirmed,stamp_confirmed_at,stamp_confirmed_by,payment_status,calendar_event_id)
+  received_date,payment_method,received_by,stamp_confirmed,stamp_confirmed_at,stamp_confirmed_by,payment_status,calendar_event_id)
  select c.charge_id,c.student_id,s.name,c.target_month,c.charge_type,c.charge_amount,remaining,
-  p_payment_method,p_received_by,true,now(),p_received_by,'処理完了',p_calendar_event_id from students s where s.student_id=c.student_id
+  coalesce(p_received_date,current_date),p_payment_method,p_received_by,true,now(),p_received_by,'処理完了',p_calendar_event_id from students s where s.student_id=c.student_id
  returning payment_id into new_id;
  update charges set charge_status='入金済',updated_at=now() where charge_id=c.charge_id;
  insert into audit_logs(action_type,target_table,target_id,student_id,action_detail,operator_name)

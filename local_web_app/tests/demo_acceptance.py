@@ -13,10 +13,10 @@ from database import init_db,connect
 from services.charge_service import create_monthly
 from services.sales_service import monthly_received_amount
 from services.export_service import to_csv,to_excel
-from datetime import date
+from services.common import today_jst
 from streamlit.testing.v1 import AppTest
 
-init_db(); month=date.today().strftime('%Y-%m'); create_monthly(month,date.today().isoformat(),'受入試験')
+init_db(); today=today_jst(); month=today[:7]; create_monthly(month,today,'受入試験')
 app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=30).run()
 assert not app.exception
 assert any('今日のレッスン' in x.value for x in app.title)
