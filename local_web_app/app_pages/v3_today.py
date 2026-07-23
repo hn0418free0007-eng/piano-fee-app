@@ -5,8 +5,36 @@ from services.calendar_service import fetch_today_events,match_students
 from services.calendar_mapping_service import get_mappings,save_mapping
 from services.v3_repository import students,charges,complete
 from services.sales_service import today_received_amount
+from services.charge_service import monthly_payment_status
 
 def yen(v): return f"{int(v):,}円"
+
+def _due_label(due):
+    if not due: return ''
+    y,m,d=due.split('-')
+    return f"{y}年{int(m)}月{int(d)}日"
+
+def render_monthly_status(status):
+    month=int(status['target_month'][5:7])
+    if status['state']=='paid':
+        st.success(f"✅ {month}月分まで支払済み")
+    elif status['state']=='due_soon':
+        st.info(f"🕒 {month}月分 未払い　支払期限：{_due_label(status['due_date'])}")
+    elif status['state']=='due_today':
+        st.warning(f"🟡 {month}月分 本日が支払期限です　支払期限：{_due_label(status['due_date'])}")
+    elif status['state']=='overdue':
+        st.error(f"⚠️ {month}月分が未入金です　支払期限：{_due_label(status['due_date'])}　期限超過 {status['overdue_days']}日")
+    elif status['state']=='due_unset':
+        st.warning(f"⚠️ {month}月分 未払い・支払期限が未設定です")
+    elif status['state']=='missing':
+        st.warning(f"⚠️ {month}月分の請求が未作成です")
+
+def _charge_sort_key(c):
+    """受領対象の並び順・初期選択: 月謝を優先し、月謝の中ではdue_dateが古い順
+    （未設定は最後）、同一・未設定同士はtarget_monthが古い順。月謝以外は
+    従来通りtarget_monthのみで並べる（受領処理・complete()自体は変更しない）。"""
+    if c['charge_type']!='月謝': return (1,False,'',c['target_month'])
+    return (0,not c.get('due_date'),c.get('due_date') or '',c['target_month'])
 
 def load_today():
     s=settings(); user=current_user() or {}; token=user.get('provider_token')
@@ -47,7 +75,8 @@ def render(operator):
                     save_mapping(lesson['normalized_title'],lesson['title'],selected,operator); st.success("保存しました。次回以降も利用します。"); st.rerun()
                 continue
             st.caption(f"照合: {lesson['match_status']}")
-            cs=charges(student['student_id'])
+            render_monthly_status(monthly_payment_status(student['student_id']))
+            cs=sorted(charges(student['student_id']),key=_charge_sort_key)
             if not cs: st.success("未入金の請求はありません。"); continue
             choices={c['charge_id']:c for c in cs}
             if len(choices)==1:

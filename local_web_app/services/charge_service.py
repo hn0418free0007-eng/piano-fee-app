@@ -73,12 +73,73 @@ def open_charges(student_id=None):
     sql+=" GROUP BY c.charge_id HAVING paid<c.charge_amount ORDER BY c.target_month,c.charge_type"
     return [dict(r) for r in connect().execute(sql,p).fetchall()]
 
+def _next_month(day):
+    y,m=int(day[:4]),int(day[5:7])
+    m+=1
+    if m>12: y+=1; m=1
+    return f"{y:04d}-{m:02d}"
+
+def _evaluate_monthly_status(rows,today):
+    """月謝charges（単一生徒分）から、本日時点の支払状況を1件に絞って返す。
+    複数月未払いの場合は due_date が最も古いものを優先する。
+    支払済みで済んでいる場合、次に払うべき月（reference_month）は、
+    このアプリの前受金運用（当月中に翌月分を払う）に合わせて「今月の翌月」とする。
+    reference_month以降の月謝が1件も無ければ「請求未作成」として扱う。
+    """
+    unpaid=[r for r in rows if r['charge_status'] in ('請求中','一部入金')]
+    unpaid_with_due=[r for r in unpaid if r.get('due_date')]
+    if unpaid_with_due:
+        target=min(unpaid_with_due,key=lambda r:r['due_date'])
+        if today>target['due_date']:
+            from datetime import date
+            days=(date.fromisoformat(today)-date.fromisoformat(target['due_date'])).days
+            return {'state':'overdue','target_month':target['target_month'],'due_date':target['due_date'],'overdue_days':days}
+        if today==target['due_date']:
+            return {'state':'due_today','target_month':target['target_month'],'due_date':target['due_date'],'overdue_days':0}
+        return {'state':'due_soon','target_month':target['target_month'],'due_date':target['due_date'],'overdue_days':None}
+    if unpaid:
+        target=min(unpaid,key=lambda r:r['target_month'])
+        return {'state':'due_unset','target_month':target['target_month'],'due_date':None,'overdue_days':None}
+    paid=[r for r in rows if r['charge_status'] in ('入金済','免除')]
+    reference_month=_next_month(today)
+    if paid:
+        latest=max(paid,key=lambda r:r['target_month'])
+        if latest['target_month']>=reference_month:
+            return {'state':'paid','target_month':latest['target_month'],'due_date':None,'overdue_days':None}
+    return {'state':'missing','target_month':reference_month,'due_date':None,'overdue_days':None}
+
+def monthly_payment_status(student_id,today=None):
+    """生徒1名分の月謝の支払状況を判定する（発表会費等は対象外）。
+    戻り値: {'state':'paid'|'due_soon'|'due_today'|'overdue'|'due_unset'|'missing','target_month':'YYYY-MM',
+             'due_date':'YYYY-MM-DD'|None,'overdue_days':int|None}
+    'due_unset'は、未払いだが支払期限が未設定のため期限判定ができない状態
+    （'due_soon'（期限前）とは区別し、期限不明であることを明示する）。
+    """
+    from services.common import today_jst
+    today=today or today_jst()
+    cloud=_cloud_client()
+    if cloud:
+        rows=cloud.table('charges').select('*').eq('student_id',student_id).eq('charge_type','月謝').execute().data
+    else:
+        rows=[dict(r) for r in connect().execute(
+            "SELECT * FROM charges WHERE student_id=? AND charge_type='月謝'",(student_id,)).fetchall()]
+    return _evaluate_monthly_status(rows,today)
+
+def _due_state_label(due_date,today):
+    """支払期限に対する現在の状態を日本語ラベルで返す（期限前／本日期限／期限超過／期限未設定）。"""
+    if not due_date: return '期限未設定'
+    if today>due_date: return '期限超過'
+    if today==due_date: return '本日期限'
+    return '期限前'
+
 def unpaid(filters=None):
+    from services.common import today_jst
+    today=today_jst()
     cloud=_cloud_client()
     if cloud:
         filters=filters or {}; rows=open_charges(); students={s['student_id']:s for s in cloud.table('students').select('*').execute().data}; out=[]
         for c in rows:
-            s=students[c['student_id']]; r={'charge_id':c['charge_id'],'name':s['name'],'school_location':s['school_location'],'enrollment_status':s['enrollment_status'],'target_month':c['target_month'],'charge_type':c['charge_type'],'charge_amount':c['charge_amount'],'paid':c['paid'],'unpaid':c['charge_amount']-c['paid'],'due_date':c.get('due_date'),'charge_status':c['charge_status'],'notes':c.get('notes','')}
+            s=students[c['student_id']]; r={'charge_id':c['charge_id'],'name':s['name'],'school_location':s['school_location'],'enrollment_status':s['enrollment_status'],'target_month':c['target_month'],'charge_type':c['charge_type'],'charge_amount':c['charge_amount'],'paid':c['paid'],'unpaid':c['charge_amount']-c['paid'],'due_date':c.get('due_date'),'charge_status':c['charge_status'],'状態':_due_state_label(c.get('due_date'),today),'notes':c.get('notes','')}
             if filters.get('target_month') and r['target_month']!=filters['target_month']: continue
             if filters.get('school') and r['school_location']!=filters['school']: continue
             if filters.get('charge_type') and r['charge_type']!=filters['charge_type']: continue
@@ -102,4 +163,5 @@ def unpaid(filters=None):
     if filters.get('state')=='期限超過':
         from datetime import date
         rows=[r for r in rows if r['due_date'] and r['due_date']<date.today().isoformat()]
+    for r in rows: r['状態']=_due_state_label(r.get('due_date'),today)
     return rows

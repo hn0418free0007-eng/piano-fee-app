@@ -2,6 +2,7 @@ from datetime import date
 import streamlit as st
 from services.student_service import list_students,save_student,change_status
 from services.charge_service import create_monthly,create_recital
+from services.common import previous_month_end,next_jan31
 
 def money(v): return f"{int(v):,}円"
 SCHOOLS=["中央教室","東教室","西教室","オンライン"]
@@ -38,14 +39,21 @@ def render_students(operator):
 
 def render_monthly(operator):
     st.title("月次請求作成")
-    months=month_choices(); current=date.today().strftime('%Y-%m'); target=st.selectbox("対象年月",months,index=months.index(current),format_func=month_label); due=st.date_input("支払期限",date.today())
+    months=month_choices(); current=date.today().strftime('%Y-%m'); target=st.selectbox("対象年月",months,index=months.index(current),format_func=month_label)
+    if st.session_state.get('_monthly_due_target')!=target:
+        st.session_state['monthly_due']=previous_month_end(target); st.session_state['_monthly_due_target']=target
+    due=st.date_input("支払期限",key='monthly_due')
+    st.caption("初期値は対象月の前月末です。")
     students=list_students(status='在籍'); st.info(f"対象 {len(students)}人 / 請求予定合計 {money(sum(s['monthly_fee'] for s in students))}")
     if st.checkbox("対象人数と金額を確認しました") and st.button(f"{int(target[5:])}月請求作成",type="primary",use_container_width=True):
         r=create_monthly(target,due.isoformat(),operator); st.success(f"新規作成 {r['created']}件 / 重複スキップ {r['skipped']}件 / 請求総額 {money(r['total'])}")
 
 def render_recital(operator):
     st.title("発表会費請求")
-    target=st.text_input("対象年度または開催名",f"{date.today().year}年度発表会"); due=st.date_input("支払期限",date.today())
+    target=st.text_input("対象年度または開催名",f"{date.today().year}年度発表会")
+    if 'recital_due' not in st.session_state: st.session_state['recital_due']=next_jan31()
+    due=st.date_input("支払期限",key='recital_due')
+    st.caption("初期値は次に来る1月31日です。")
     students=list_students(status='在籍'); lookup={s['student_id']:s for s in students}
     ids=st.multiselect("参加生徒（不参加者は選択しない）",lookup,format_func=lambda x:f"{lookup[x]['name']}（{money(lookup[x]['recital_fee'])}）")
     st.info(f"対象 {len(ids)}人 / 合計 {money(sum(lookup[x]['recital_fee'] for x in ids))}")

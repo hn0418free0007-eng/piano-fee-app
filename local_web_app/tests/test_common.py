@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import services.common as common
 
@@ -18,3 +18,26 @@ def test_today_jst_resolves_by_asia_tokyo_offset_not_system_clock(monkeypatch):
     """
     monkeypatch.setattr(common, "datetime", _FixedDatetime)
     assert common.today_jst() == "2026-07-24"
+
+def test_previous_month_end_normal_month():
+    assert common.previous_month_end("2026-08") == date(2026, 7, 31)
+
+def test_previous_month_end_year_boundary():
+    assert common.previous_month_end("2026-01") == date(2025, 12, 31)
+
+def test_previous_month_end_non_leap_february():
+    assert common.previous_month_end("2027-03") == date(2027, 2, 28)
+
+def test_previous_month_end_leap_year():
+    assert common.previous_month_end("2028-03") == date(2028, 2, 29)
+
+def test_next_jan31_from_within_january_is_same_year():
+    assert common.next_jan31("2026-01-15") == date(2026, 1, 31)
+
+def test_next_jan31_from_other_months_is_next_year():
+    assert common.next_jan31("2026-07-23") == date(2027, 1, 31)
+    assert common.next_jan31("2026-12-31") == date(2027, 1, 31)
+
+def test_next_jan31_defaults_to_today_jst(monkeypatch):
+    monkeypatch.setattr(common, "datetime", _FixedDatetime)
+    assert common.next_jan31() == date(2027, 1, 31)

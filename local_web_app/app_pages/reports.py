@@ -17,10 +17,15 @@ def month_label(v):
 def downloads(rows,prefix):
     c=st.columns(2); c[0].download_button("CSVを保存",to_csv(rows),f"{prefix}.csv","text/csv",use_container_width=True); c[1].download_button("Excelを保存",to_excel(rows,prefix),f"{prefix}.xlsx",use_container_width=True)
 
+UNPAID_COLUMN_ORDER=['name','school_location','target_month','charge_type','charge_amount','due_date','状態','unpaid','paid','charge_status','enrollment_status','notes','charge_id']
+
 def render_unpaid():
     st.title("未入金一覧")
     schools=sorted({r['school_location'] for r in unpaid()}); c=st.columns(5); month=c[0].selectbox("対象年月",month_options(),format_func=month_label); school=c[1].selectbox("教室",[""]+schools,format_func=lambda x:x or "すべて"); typ=c[2].selectbox("請求種別",["","月謝","発表会費","教材費","その他"],format_func=lambda x:x or "すべて"); status=c[3].selectbox("在籍状況",["","在籍","休会","退会"],format_func=lambda x:x or "すべて"); state=c[4].selectbox("状態",["","未入金","一部入金","期限超過"],format_func=lambda x:x or "すべて")
-    rows=unpaid(dict(target_month=month,school=school,charge_type=typ,enrollment_status=status,state=state)); st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True); downloads(rows,"未入金一覧")
+    rows=unpaid(dict(target_month=month,school=school,charge_type=typ,enrollment_status=status,state=state))
+    # 対象月→請求種別→請求額→支払期限→状態の順に近づける（表示・出力の列順のみ。集計・フィルタ処理は変更しない）
+    rows=[{k:r[k] for k in UNPAID_COLUMN_ORDER if k in r} for r in rows]
+    st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True); downloads(rows,"未入金一覧")
 
 def render_history(operator):
     st.title("入金履歴")
