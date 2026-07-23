@@ -5,6 +5,7 @@ from pathlib import Path
 from database import DB_PATH
 
 TABLES=[('students','student_id'),('charges','charge_id'),('payments','payment_id'),('audit_logs','log_id'),('calendar_mappings','normalized_title')]
+IDENTITY_TABLES=[('students','student_id'),('charges','charge_id'),('payments','payment_id'),('audit_logs','log_id')]
 
 def source_hash(path):
     h=hashlib.sha256()
@@ -17,6 +18,20 @@ def preview(path=DB_PATH):
     with sqlite3.connect(uri,uri=True) as con:
         con.row_factory=sqlite3.Row; names={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         return {t:[dict(r) for r in con.execute(f'SELECT * FROM {t}').fetchall()] if t in names else [] for t,_ in TABLES}
+
+def sync_identity_sequences(client):
+    rows=client.rpc('sync_migration_identity_sequences').execute().data or []
+    actual={(r.get('table_name'),r.get('column_name')) for r in rows}
+    expected=set(IDENTITY_TABLES)
+    if actual!=expected:
+        missing=sorted(expected-actual); unexpected=sorted(actual-expected)
+        raise RuntimeError(f'Identityシーケンス同期結果が不完全です。missing={missing}, unexpected={unexpected}')
+    for row in rows:
+        expected_value=row.get('max_id') if row.get('max_id') is not None else 1
+        if expected_value!=row.get('sequence_value') or bool(row.get('is_called'))!=(row.get('max_id') is not None):
+            raise RuntimeError(f"{row.get('table_name')}.{row.get('column_name')} のシーケンス値が最大IDと一致しません。")
+        print(f"{row['table_name']}.{row['column_name']}: 最大ID {row['max_id']} / シーケンス {row['sequence_value']}")
+    return rows
 
 def migrate(client,data,fingerprint,source_name):
     summary={}; total_errors=[]
@@ -33,6 +48,9 @@ def migrate(client,data,fingerprint,source_name):
         summary[table]={'registered':ok,'skipped':skip,'errors':len(errors)}; total_errors.extend(f'{table}: {x}' for x in errors)
         print(f"{table}: 登録 {ok} / 既存スキップ {skip} / エラー {len(errors)}")
         for e in errors[:5]: print(f'  {e}',file=sys.stderr)
+    if not total_errors:
+        try: summary['identity_sequences']=sync_identity_sequences(client)
+        except Exception as e: total_errors.append(f'identity_sequences: {e}')
     if not total_errors:
         client.table('migration_runs').insert({'source_sha256':fingerprint,'source_name':source_name,'detail':summary}).execute()
     return summary,total_errors
