@@ -5,7 +5,7 @@
 > 担当者は人間・ChatGPT・Codex・Claude Codeなどを問いません。
 > コードを変更する前に、必ず本ファイルと `docs/04_PROJECT_STATUS.md` を読み、現在の状態を理解してから作業を開始してください。
 
-最終更新日: 2026-07-17
+最終更新日: 2026-07-23
 
 ## この文書の目的
 
@@ -13,21 +13,24 @@
 
 この文書に書かれた状態と実際のRepositoryが異なる場合は、`git status`、`git log`、コードを優先し、確認後に本書を更新してください。未コミット変更は所有者の作業であるため、勝手に破棄しません。
 
+> 過去の教訓: 2026-07-23の作業開始時点で、コード（Identity Sequence同期）とテストはコミット済み（`11ec903`）だったにもかかわらず、本ファイルと `docs/04_PROJECT_STATUS.md` は「未コミット」のままの記述で止まっていました。コミットとドキュメント更新は必ずセットで終わらせてください。詳細は `docs/worklog.md` の2026-07-23エントリを参照してください。
+
 ## 最初に読む文書
 
 必ず次の順に読みます。
 
 1. `docs/08_CHATGPT引継ぎ.md`（本ファイル）
 2. `docs/04_PROJECT_STATUS.md`
-3. 必要に応じて `docs/07_トラブルシューティング.md`
-4. SQL作業なら `docs/05_よく使うSQL.md`
+3. `docs/worklog.md`（最新エントリ、作業履歴）
+4. 必要に応じて `docs/07_トラブルシューティング.md`
+5. SQL作業なら `docs/05_よく使うSQL.md`
 
 変更履歴は `docs/09_リリースノート.md` を参照してください。
 
 新しいAIへの最初の依頼文:
 
 ```text
-まず docs/08_CHATGPT引継ぎ.md と docs/04_PROJECT_STATUS.md を読んでください。現在のGit状態と次回最優先事項を確認し、作業前に実施内容を短く報告してください。
+まず docs/08_CHATGPT引継ぎ.md、docs/04_PROJECT_STATUS.md、docs/worklog.md を読んでください。現在のGit状態と次回最優先事項を確認し、作業前に実施内容を短く報告してください。
 ```
 
 ## プロジェクト概要
@@ -79,7 +82,9 @@ piano-fee-app/
 │  ├─ 05_よく使うSQL.md
 │  ├─ 06_環境変数.md
 │  ├─ 07_トラブルシューティング.md
-│  └─ 08_CHATGPT引継ぎ.md
+│  ├─ 08_CHATGPT引継ぎ.md
+│  ├─ 09_リリースノート.md
+│  └─ worklog.md
 ├─ local_web_app/
 │  ├─ app.py
 │  ├─ database.py
@@ -104,7 +109,7 @@ piano-fee-app/
 | `services/payment_service.py` | 入金登録、押印、取消 |
 | `services/charge_service.py` | 月謝・発表会費請求 |
 | `services/student_service.py` | 生徒追加・更新・在籍状態 |
-| `services/sales_service.py` | 売上集計。40,000円問題の重点確認対象 |
+| `services/sales_service.py` | 売上集計。40,000円問題の原因箇所（`received_date`基準で集計し`target_month`を見ていない） |
 | `services/export_service.py` | CSV・Excel出力 |
 | `services/backup_service.py` | ローカルSQLiteバックアップ |
 | `migrate_to_supabase.py` | SQLite移行とIdentity Sequence同期呼出し |
@@ -146,11 +151,12 @@ piano-fee-app/
 - SQLiteからSupabaseへのデータ移行
 - 今日の受付
 - 受領登録
-- Identity Sequence同期実装
+- Identity Sequence同期（実装・コミット済み: `11ec903`）
 - 受領登録時のduplicate keyエラー対策
 - プロジェクトドキュメント8ファイル作成
 - `docs/` のGitHubへのpush
 - ローカルデモと自動テスト
+- 作業履歴管理（`docs/worklog.md`）の運用開始
 
 ## 動作確認済み
 
@@ -160,20 +166,22 @@ piano-fee-app/
 - 受領後、今日の売上9,000円になる
 - 受領後、受領済み1名になる
 - 受領後、未受領0名になる
+- Identity Sequence同期テスト4件が成功する
+- 全体テストスイート12件が成功する
 
 ## 未完成機能・未確認事項
 
-- 売上管理・確定申告画面の40,000円表示の原因調査
+- 売上管理・確定申告画面の集計ロジック修正（原因特定済み、修正方針は承認待ち）
 - 受領取消処理の動作確認
 - CSV出力の確認・改善
 - Excel出力の確認・改善
 - 本番データでの総合運用テスト
 - `docs/01_URL一覧.md` の本番URL・Project名の未設定部分の追記
-- Identity Sequence関連の未コミット変更の確認・コミット・push
+- Streamlit本番環境でのブラウザ確認（売上問題の修正方針確定後に実施）
 
 ## 既知の問題
 
-### 売上管理・確定申告画面が40,000円と表示される
+### 売上管理・確定申告画面が40,000円と表示される（原因特定済み・修正未適用）
 
 確認済み:
 
@@ -182,17 +190,38 @@ piano-fee-app/
 - 売上管理・確定申告画面では40,000円
 - 内訳として22,000円と18,000円が見えていた
 
-重点確認箇所:
+#### 原因（コードレベルで特定済み）
 
-- 売上画面が `payments` ではなく `charges` を集計していないか
-- `amount_received` と `charge_amount` を混同していないか
-- 取消済み入金を除外しているか
-- 対象期間の絞り込みが正しいか
-- サンプルデータが含まれていないか
-- 同じ入金を重複集計していないか
-- Supabase移行前の古いロジックが残っていないか
+「今日の受付」の「今日の売上」（`pages/v3_today.py`）は、そのブラウザセッション中に受領した分だけを `st.session_state` で合算した値であり、DBには問い合わせていません。一方、「月別売上」（`services/sales_service.py` の `monthly_sales`）は、`payments` テーブルから `cancelled_at is null` の全行を取得し、**`received_date`（受領日）の年月**が一致する行を合算しています。**`target_month`（請求対象月）は見ていません。**
 
-修正前に、原因、対象ファイル、修正方針を短く説明します。
+このため、前受金（翌月分を当月中に受領）や後払いの回収、未取消のテスト入金などが同じ暦月に存在すると、「月別売上」は本来のその月の請求額より大きく表示されます。
+
+ローカルデモDBで再現し、以下のとおり確認済みです（実行結果）。
+
+```text
+monthly_sales('2026-07') の結果:
+{'生徒名': 'あおぞら かなで', '請求種別': '月謝', '売上金額': 22000}
+{'生徒名': 'さくら みらい', '請求種別': '月謝', '売上金額': 9000}
+```
+
+「あおぞら かなで」は7月分月謝11,000円のところ、8月分月謝（前払い、`target_month='2026-08'`）を7月中に受領していたため、7月の売上に22,000円として合算されました。本番報告の「22,000円」という内訳と数値的に一致する構造です。
+
+本番Supabaseの実データはこの開発環境から直接参照できないため（認証情報なし）、実データでの完全な内訳確認は次のSQLをSupabase SQL Editorで実行して行う必要があります。
+
+```sql
+select
+  student_name, payment_type, target_month,
+  to_char(received_date,'YYYY-MM') as received_month,
+  amount_received, received_date, cancelled_at
+from public.payments
+where cancelled_at is null
+  and to_char(received_date,'YYYY-MM') = '対象年月'
+order by student_name, received_date;
+```
+
+詳細な調査経緯は `docs/04_PROJECT_STATUS.md` の「既知の問題」および `docs/worklog.md` の2026-07-23エントリを参照してください。
+
+修正方針・実装前に、原因、対象ファイル、修正方針をユーザーへ説明し、承認を得ます。
 
 ## 今回までの重要な修正
 
@@ -230,7 +259,7 @@ piano-fee-app/
 - `service_role` 専用RPC
 - 移行成功後に同期結果を検証
 
-この対応は現在未コミットです。内容確認・テスト・分離コミットが次回最優先です。
+この対応は、コミット `11ec903`（2026-07-23）で反映済みです。関連テスト4件、全体テスト12件が成功しています。
 
 ### Supabase移行
 
@@ -243,25 +272,11 @@ piano-fee-app/
 
 ## 現在のGit状態
 
-`docs/` の8ファイルはGitHubへpush済みです。
+- `git status`: クリーン（`nothing to commit, working tree clean`）
+- `main` は `origin/main` と同期済みです。
+- 最新コミット: `11ec903131cc1368e5e1759b13fe0a83f5be8911`（`Add Supabase identity sequence synchronization`、2026-07-23 14:45）
 
-- コミットID: `00983e86d879d39d32bc9a15ba175768f4196547`
-- コミットメッセージ: `Add project documentation`
-- このコミット時点では `main` と `origin/main` は同期済みです。
-
-Identity Sequence関連の未コミット変更:
-
-```text
- M local_web_app/migrate_to_supabase.py
- M local_web_app/supabase_schema.sql
-?? local_web_app/supabase_sequence_sync.sql
-?? local_web_app/tests/test_migrate_to_supabase.py
-```
-
-- `M`: Git管理済みファイルが変更されている状態
-- `??`: Gitでまだ管理されていない新規ファイル
-
-これはエラーではありません。確認後に必要な変更だけをコミットする予定です。reset、checkout、clean、削除を実行しないでください。
+未コミットの変更はありません。今回のドキュメント更新・売上調査結果は、ユーザーの承認を得るまでコミットしません。
 
 ## 次回再開時の手順
 
@@ -271,62 +286,36 @@ Identity Sequence関連の未コミット変更:
 
 - `docs/08_CHATGPT引継ぎ.md`
 - `docs/04_PROJECT_STATUS.md`
+- `docs/worklog.md`（最新エントリ）
 
 新しいAIへの最初の依頼文:
 
 ```text
-まず docs/08_CHATGPT引継ぎ.md と docs/04_PROJECT_STATUS.md を読んでください。現在のGit状態と次回最優先事項を確認し、作業前に実施内容を短く報告してください。
+まず docs/08_CHATGPT引継ぎ.md、docs/04_PROJECT_STATUS.md、docs/worklog.md を読んでください。現在のGit状態と次回最優先事項を確認し、作業前に実施内容を短く報告してください。
 ```
 
-### STEP 2: Gitの未コミット変更を確認する
+### STEP 2: 売上集計修正の承認を得る
 
-Repositoryルートで実行します。
+`docs/04_PROJECT_STATUS.md` の「既知の問題」に記載した原因と修正方針をユーザーへ提示し、承認を得るまでコードを変更しません。
+
+### STEP 3: 承認された方針で修正・テストする
+
+`services/sales_service.py` を修正し、前受金・後払いケースを含む回帰テストを追加して実行します。
+
+```powershell
+.\local_web_app\.venv\Scripts\python.exe -m pytest local_web_app/tests
+```
+
+失敗した場合、原因を調べる前に大量修正しません。失敗内容、原因候補、必要な変更を説明します。
+
+### STEP 4: 必要な変更だけコミットする
 
 ```powershell
 git status
 git diff
-git diff --no-index NUL local_web_app/supabase_sequence_sync.sql
-git diff --no-index NUL local_web_app/tests/test_migrate_to_supabase.py
-```
-
-Windows環境で `git diff --no-index` が動かない場合は、新規ファイルを直接開きます。
-
-確認対象:
-
-- `local_web_app/migrate_to_supabase.py`
-- `local_web_app/supabase_schema.sql`
-- `local_web_app/supabase_sequence_sync.sql`
-- `local_web_app/tests/test_migrate_to_supabase.py`
-
-確認ポイント:
-
-- Identity Sequence対応に必要な変更か
-- 既存機能を壊していないか
-- テスト内容が変更内容と一致するか
-- Secret、JWT、APIキー、service-role keyが含まれていないか
-- 一時的なデバッグコードが残っていないか
-
-### STEP 3: Identity Sequence関連変更をテストする
-
-Repositoryルートからの例:
-
-```powershell
-.\local_web_app\.venv\Scripts\python.exe -m pytest local_web_app/tests/test_migrate_to_supabase.py
-```
-
-仮想環境の場所が異なる場合は調整します。失敗した場合、原因を調べる前に大量修正しません。失敗内容、原因候補、必要な変更を説明します。
-
-### STEP 4: 必要な変更だけコミットする
-
-テストと内容に問題がなければ、4ファイルだけをステージします。
-
-```powershell
-git add local_web_app/migrate_to_supabase.py
-git add local_web_app/supabase_schema.sql
-git add local_web_app/supabase_sequence_sync.sql
-git add local_web_app/tests/test_migrate_to_supabase.py
+git add <対象ファイル>
 git diff --cached
-git commit -m "Add Supabase identity sequence synchronization"
+git commit -m "<内容に応じたメッセージ>"
 git push origin main
 git status
 git log -1 --oneline
@@ -343,36 +332,14 @@ Community Cloudの本番アプリを開き、次を順番に確認します。
 3. Google Calendarを取得できる
 4. 今日の受付画面が表示される
 5. 受領登録ができる
-6. エラーが表示されない
+6. 売上管理・確定申告画面の表示が正しい
+7. エラーが表示されない
 
 本番URLが `docs/01_URL一覧.md` で未設定なら、確認できた時点で追記します。URLだけを記載し、Secretは書きません。
 
-### STEP 6: 売上40,000円表示の原因を調査する
+### STEP 6: 受領取消処理を確認する
 
-次の最優先機能調査です。
-
-既に分かっていること:
-
-- 9,000円の受領登録は正常
-- 今日の受付画面では売上9,000円
-- 売上管理・確定申告画面では40,000円
-- 22,000円と18,000円の内訳が見えていた
-
-重点確認:
-
-- `payments` ではなく `charges` を集計していないか
-- 取消済み入金を除外しているか
-- 請求額と受領額を混同していないか
-- 対象期間が正しいか
-- サンプルデータが含まれていないか
-- 重複集計がないか
-- SQLite移行前の古いロジックが残っていないか
-
-コード修正前に、原因、対象ファイル、修正方針を短く報告します。
-
-### STEP 7: 受領取消処理を確認する
-
-売上問題の原因調査後にテストします。
+売上問題の修正確認後にテストします。
 
 確認項目:
 
@@ -385,12 +352,13 @@ Community Cloudの本番アプリを開き、次を順番に確認します。
 
 テストデータと本番データを混同しません。データ操作前に対象を確認します。
 
-### STEP 8: ドキュメントを更新する
+### STEP 7: ドキュメントを更新する
 
 作業終了前に必ず更新します。
 
 - `docs/04_PROJECT_STATUS.md`
 - `docs/08_CHATGPT引継ぎ.md`
+- `docs/worklog.md`
 
 必要に応じて更新します。
 
@@ -416,13 +384,14 @@ Community Cloudの本番アプリを開き、次を順番に確認します。
 12. コード修正後は、テスト、動作確認、Git状態確認、docs更新の順で終了する。
 13. DB操作前に対象Projectとバックアップを確認し、最初はSELECTで状態を確認する。
 14. 実データや実メールをAIチャット、Issue、ログ、スクリーンショットへ載せない。
+15. コード・テストをコミットしたら、同じ作業の中で `docs/04_PROJECT_STATUS.md`・`docs/08_CHATGPT引継ぎ.md`・`docs/worklog.md` の更新まで終わらせる。ドキュメント更新漏れのまま作業を終えない。
 
 ## AIへ依頼するときの開始文
 
 ### 開発再開
 
 ```text
-まず docs/08_CHATGPT引継ぎ.md と docs/04_PROJECT_STATUS.md を読んでください。現在のGit状態と次回最優先事項を確認し、作業前に実施内容を短く報告してください。
+まず docs/08_CHATGPT引継ぎ.md、docs/04_PROJECT_STATUS.md、docs/worklog.md を読んでください。現在のGit状態と次回最優先事項を確認し、作業前に実施内容を短く報告してください。
 ```
 
 ### 原因調査だけを依頼
@@ -446,17 +415,18 @@ Community Cloudの本番アプリを開き、次を順番に確認します。
 3. `git status` と `git diff` を確認する。
 4. `docs/04_PROJECT_STATUS.md` の現在状態、未完了、次回最優先、更新履歴を更新する。
 5. 本ファイルのGit状態、完成済み、既知の問題、次回手順を更新する。
-6. 必要に応じてSQL、トラブル、URL文書を更新する。
-7. Secretが差分にないことを確認する。
-8. 無関係な変更を混ぜずコミットする。
+6. `docs/worklog.md` に実施内容・変更ファイル・テスト結果・Git状況・決定事項・保留事項・次回作業・申し送りを追記する。
+7. 必要に応じてSQL、トラブル、URL文書を更新する。
+8. Secretが差分にないことを確認する。
+9. 無関係な変更を混ぜずコミットする。
 
 ## 10分で再開するチェックリスト
 
 - [ ] 本ファイルを読んだ
 - [ ] `docs/04_PROJECT_STATUS.md` を読んだ
+- [ ] `docs/worklog.md` の最新エントリを読んだ
 - [ ] `git status` を確認した
 - [ ] `git diff` と新規ファイルを確認した
-- [ ] 次回最優先のIdentity Sequence変更を把握した
+- [ ] 売上40,000円問題の原因（`received_date`基準集計）と修正が承認待ちであることを把握した
 - [ ] 関連テストを実行する準備ができた
-- [ ] 売上40,000円問題を次の機能調査として把握した
 - [ ] 作業前に実施内容を短く報告した
