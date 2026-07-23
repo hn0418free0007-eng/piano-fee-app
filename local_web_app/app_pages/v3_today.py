@@ -28,9 +28,13 @@ def render(operator):
         # 当月月謝を優先し、それ以外は期限・対象順
         cs=sorted(cs,key=lambda c:(c['charge_type']!='月謝',c['target_month']))
         if st.session_state.get(f"done_{lesson['event_id']}"): done+=1
-    m=st.columns(4); m[0].metric("今日のレッスン",f"{len(lessons)}名"); m[1].metric("今日の受領済",f"{done}名"); m[2].metric("未受領",f"{max(payable-done,0)}名"); m[3].metric("本日の受領額",yen(today_received_amount()))
+    m=st.columns(4,gap="medium"); m[0].metric("今日のレッスン",f"{len(lessons)}名"); m[1].metric("今日の受領済",f"{done}名"); m[2].metric("未受領",f"{max(payable-done,0)}名"); m[3].metric("本日の受領額",yen(today_received_amount()))
     st.caption("本日、受領登録された金額の合計です。取消済みは含みません。")
-    if not lessons: st.success("今日のレッスン予定はありません。"); return
+    if not lessons:
+        st.markdown('<div class="empty-state"><div class="icon">📅</div>'
+          '<p class="title">今日のレッスン予定はありません</p>'
+          '<p class="hint">Google Calendarに予定が登録されると、ここに表示されます。</p></div>',unsafe_allow_html=True)
+        return
     for lesson in lessons:
         with st.container(border=True):
             st.markdown(f"## {lesson['time']}　{lesson['title']}")
